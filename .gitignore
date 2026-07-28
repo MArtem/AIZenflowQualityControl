@@ -1,6 +1,7 @@
 .DS_Store
 .build/
 .swiftpm/
+.quality-control-cache/
 DerivedData/
 *.xcresult
 *.xcarchive

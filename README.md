@@ -6,9 +6,10 @@ manual workflow definitions.
 
 ## Current Status
 
-Stage 4 repository scaffold only. No executable verifier, test suite, GitHub Actions workflow,
-project profile, hook, or application integration exists yet. Nothing in this repository currently
-produces verification evidence or a `PASS` verdict.
+Stage 5 is complete at its approved scope. The user-owned Swift build and focused command matrix
+passed on 2026-07-29. The repository still contains no test suite, GitHub Actions workflow, hook,
+application profile, or application integration. Current command reports are local diagnostics,
+not the versioned evidence model planned for a later stage.
 
 ## Authority Boundary
 
@@ -43,6 +44,47 @@ results, and residual risk.
   user explicitly changes the governing policy.
 - Branch protection, hooks, application profiles, and application integration are outside this
   scaffold.
+
+## Stage 5 Commands
+
+The package has no third-party dependencies and declares a macOS 13 minimum. After the user runs
+`swift build`, the bounded command surface is:
+
+```text
+swift run quality validate-profile --profile <profile.json>
+swift run quality doctor --profile <profile.json> --repository-root <repository>
+swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
+```
+
+- `validate-profile` decodes schema version 1 and rejects missing, absolute, duplicate, or
+  traversal-bearing project/source paths.
+- `doctor` verifies configured repository, project/workspace, source, and sandbox paths without
+  running Xcode, builds, or tests.
+- `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
+  checks from explicit profile and policy inputs.
+
+Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
+unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.
+
+The neutral fixtures under `fixtures/profiles/` demonstrate a structurally valid profile and a
+deliberately invalid traversal/cache-boundary profile. They are not a test suite.
+
+## Stage 5 Verification
+
+The user ran the complete focused matrix with SwiftPM caches and scratch output contained inside
+`.quality-control-cache/`:
+
+- Debug `swift build`: PASS, exit `0`;
+- `validate-profile` with the ignored neutral runtime profile: `PASS`, exit `0`;
+- `validate-profile` with `invalid-path-traversal.json`: `FAIL`, exit `1`, reporting both
+  traversal paths and the cache-outside-sandbox violation;
+- `doctor` with the synthetic local fixture: `PASS`, exit `0`;
+- `static` with the synthetic local fixture: `PASS`, exit `0`, scanning one regular file;
+- `doctor` with a missing repository root: `BLOCKED`, exit `2`.
+
+The synthetic `.xcodeproj` fixture proves only the current path, boundary, profile, and static-scan
+contracts. It is intentionally not a buildable Xcode project and provides no Xcode graph, scheme,
+build, test, application, security, or production-readiness evidence.
 
 See `docs/OWNERSHIP_AND_SOURCE_OF_TRUTH.md`, `docs/VERSIONING_AND_RELEASE_POLICY.md`, and
 `docs/THREAT_MODEL.md` before adding executable behavior.
