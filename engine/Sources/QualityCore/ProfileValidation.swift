@@ -15,9 +15,63 @@ public struct ValidationIssue: Codable, Equatable, Sendable {
 public enum ProfileLoader {
     public static func load(from url: URL) throws -> ProjectProfile {
         let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        try validateClosedObjectProperties(in: data)
         return try JSONDecoder().decode(ProjectProfile.self, from: data)
     }
+
+    private static func validateClosedObjectProperties(in data: Data) throws {
+        guard let profile = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+
+        try rejectUnknownProperties(
+            in: profile,
+            allowed: [
+                "schemaVersion",
+                "project",
+                "scheme",
+                "sourcePaths",
+                "mode",
+                "permissions",
+                "sandbox"
+            ]
+        )
+
+        if let project = profile["project"] as? [String: Any] {
+            try rejectUnknownProperties(in: project, allowed: ["kind", "path"])
+        }
+
+        if let permissions = profile["permissions"] as? [String: Any] {
+            try rejectUnknownProperties(
+                in: permissions,
+                allowed: [
+                    "testCreation",
+                    "testModification",
+                    "localTestExecution",
+                    "githubExecution",
+                    "uiTests",
+                    "simulatorOrDevice",
+                    "performanceOrInstruments"
+                ]
+            )
+        }
+
+        if let sandbox = profile["sandbox"] as? [String: Any] {
+            try rejectUnknownProperties(in: sandbox, allowed: ["root", "cache"])
+        }
+    }
+
+    private static func rejectUnknownProperties(
+        in object: [String: Any],
+        allowed: Set<String>
+    ) throws {
+        guard Set(object.keys).isSubset(of: allowed) else {
+            throw UnknownProfilePropertyError()
+        }
+    }
 }
+
+private struct UnknownProfilePropertyError: Error {}
 
 public enum ProfileValidator {
     public static func validate(_ profile: ProjectProfile) -> [ValidationIssue] {
@@ -134,7 +188,7 @@ public enum ProfileValidator {
         let rootPath = root.standardizedFileURL.path
         let resolvedPath = resolved.path
 
-        guard resolvedPath == rootPath || resolvedPath.hasPrefix(rootPath + "/") else {
+        guard isContained(resolvedPath, by: rootPath, allowingRoot: true) else {
             return nil
         }
 
@@ -144,8 +198,7 @@ public enum ProfileValidator {
     static func resolvesWithinRepository(_ candidate: URL, root: URL) -> Bool {
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
         let resolvedCandidate = candidate.resolvingSymlinksInPath().standardizedFileURL.path
-        return resolvedCandidate == resolvedRoot
-            || resolvedCandidate.hasPrefix(resolvedRoot + "/")
+        return isContained(resolvedCandidate, by: resolvedRoot, allowingRoot: true)
     }
 
     private static func validateRelativePath(
@@ -193,6 +246,24 @@ public enum ProfileValidator {
     private static func isDescendant(_ candidate: String, of root: String) -> Bool {
         let rootPath = (root as NSString).standardizingPath
         let candidatePath = (candidate as NSString).standardizingPath
-        return candidatePath.hasPrefix(rootPath + "/")
+        return isContained(candidatePath, by: rootPath, allowingRoot: false)
+    }
+
+    private static func isContained(
+        _ candidatePath: String,
+        by rootPath: String,
+        allowingRoot: Bool
+    ) -> Bool {
+        let rootComponents = URL(fileURLWithPath: rootPath).standardizedFileURL.pathComponents
+        let candidateComponents = URL(fileURLWithPath: candidatePath)
+            .standardizedFileURL
+            .pathComponents
+
+        guard candidateComponents.count >= rootComponents.count,
+              candidateComponents.prefix(rootComponents.count).elementsEqual(rootComponents) else {
+            return false
+        }
+
+        return allowingRoot || candidateComponents.count > rootComponents.count
     }
 }

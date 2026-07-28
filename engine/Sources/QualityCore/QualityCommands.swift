@@ -47,6 +47,13 @@ private struct StaticPolicy: Decodable {
     let excludedDirectoryNames: [String]
     let forbiddenFileSuffixes: [String]
 
+    func matchesForbiddenSuffix(_ pathComponent: String) -> Bool {
+        let lowercasedComponent = pathComponent.lowercased()
+        return forbiddenFileSuffixes.contains {
+            lowercasedComponent.hasSuffix($0.lowercased())
+        }
+    }
+
     func validationChecks() -> [QualityCheck] {
         var checks: [QualityCheck] = []
 
@@ -80,12 +87,14 @@ private struct StaticPolicy: Decodable {
             )
         }
 
-        if forbiddenFileSuffixes.contains(where: { !$0.hasPrefix(".") || $0.count < 2 }) {
+        if forbiddenFileSuffixes.contains(where: {
+            !$0.hasPrefix(".") || $0.count < 2 || $0.contains("/")
+        }) {
             checks.append(
                 QualityCheck(
                     id: "QC.POLICY.INVALID_FILE_SUFFIX",
                     status: .fail,
-                    message: "Forbidden file suffixes must start with a dot."
+                    message: "Forbidden file suffixes must be single path components starting with a dot."
                 )
             )
         }
@@ -163,10 +172,10 @@ public enum QualityCommands {
                 relativePath: profile.project.path,
                 under: repositoryRoot
             ) {
-                let projectCheck = existenceCheck(
+                let projectCheck = directoryCheck(
                     id: "QC.DOCTOR.PROJECT",
                     url: projectURL,
-                    message: "Configured project or workspace exists.",
+                    message: "Configured project or workspace exists and is a directory.",
                     relativePath: profile.project.path
                 )
                 checks.append(projectCheck)
@@ -227,13 +236,40 @@ public enum QualityCommands {
                 }
             }
 
-            checks.append(
-                directoryCheck(
-                    id: "QC.DOCTOR.SANDBOX_ROOT",
-                    url: URL(fileURLWithPath: profile.sandbox.root),
-                    message: "Configured sandbox root exists and is a directory."
-                )
+            let sandboxRootURL = URL(fileURLWithPath: profile.sandbox.root)
+            let sandboxRootCheck = directoryCheck(
+                id: "QC.DOCTOR.SANDBOX_ROOT",
+                url: sandboxRootURL,
+                message: "Configured sandbox root exists and is a directory.",
+                relativePath: profile.sandbox.root
             )
+            checks.append(sandboxRootCheck)
+
+            let sandboxCacheURL = URL(fileURLWithPath: profile.sandbox.cache)
+            let sandboxCacheCheck = directoryCheck(
+                id: "QC.DOCTOR.SANDBOX_CACHE",
+                url: sandboxCacheURL,
+                message: "Configured sandbox cache exists and is a directory.",
+                relativePath: profile.sandbox.cache
+            )
+            checks.append(sandboxCacheCheck)
+
+            if sandboxRootCheck.status == .pass, sandboxCacheCheck.status == .pass {
+                let cacheRemainsInsideSandbox = ProfileValidator.resolvesWithinRepository(
+                    sandboxCacheURL,
+                    root: sandboxRootURL
+                )
+                checks.append(
+                    QualityCheck(
+                        id: "QC.DOCTOR.SANDBOX_CACHE_BOUNDARY",
+                        status: cacheRemainsInsideSandbox ? .pass : .fail,
+                        message: cacheRemainsInsideSandbox
+                            ? "Resolved sandbox cache remains inside the sandbox root."
+                            : "Resolved sandbox cache escapes the sandbox root through a symbolic link.",
+                        path: profile.sandbox.cache
+                    )
+                )
+            }
 
             return QualityReport(command: "doctor", checks: checks)
         }
@@ -336,6 +372,7 @@ public enum QualityCommands {
                     continue
                 }
 
+                var enumerationBlockedPath: String?
                 guard let enumerator = FileManager.default.enumerator(
                     at: sourceURL,
                     includingPropertiesForKeys: [
@@ -344,7 +381,14 @@ public enum QualityCommands {
                         .isSymbolicLinkKey,
                         .fileSizeKey
                     ],
-                    options: []
+                    options: [],
+                    errorHandler: { failedURL, _ in
+                        enumerationBlockedPath = relativePath(
+                            for: failedURL,
+                            root: repositoryRoot
+                        )
+                        return false
+                    }
                 ) else {
                     checks.append(
                         QualityCheck(
@@ -386,6 +430,19 @@ public enum QualityCommands {
                         }
 
                         if values.isDirectory == true {
+                            if policy.matchesForbiddenSuffix(fileURL.lastPathComponent) {
+                                checks.append(
+                                    QualityCheck(
+                                        id: "QC.STATIC.FORBIDDEN_ARTIFACT",
+                                        status: .fail,
+                                        message: "Generated or release artifact is forbidden in source scope.",
+                                        path: relativePath
+                                    )
+                                )
+                                enumerator.skipDescendants()
+                                continue
+                            }
+
                             if policy.excludedDirectoryNames.contains(fileURL.lastPathComponent) {
                                 enumerator.skipDescendants()
                             }
@@ -409,10 +466,7 @@ public enum QualityCommands {
                             )
                         }
 
-                        let lowercasedPath = fileURL.lastPathComponent.lowercased()
-                        if policy.forbiddenFileSuffixes.contains(
-                            where: { lowercasedPath.hasSuffix($0.lowercased()) }
-                        ) {
+                        if policy.matchesForbiddenSuffix(fileURL.lastPathComponent) {
                             checks.append(
                                 QualityCheck(
                                     id: "QC.STATIC.FORBIDDEN_ARTIFACT",
@@ -433,11 +487,32 @@ public enum QualityCommands {
                         )
                     }
                 }
+
+                if let enumerationBlockedPath {
+                    checks.append(
+                        QualityCheck(
+                            id: "QC.STATIC.ENUMERATION_BLOCKED",
+                            status: .blocked,
+                            message: "Directory enumeration stopped because an entry could not be read.",
+                            path: enumerationBlockedPath
+                        )
+                    )
+                }
             }
 
-            if !checks.contains(where: {
+            let hasStaticProblem = checks.contains(where: {
                 $0.id.hasPrefix("QC.STATIC.") && $0.status != .pass
-            }) {
+            })
+
+            if scannedFileCount == 0, !hasStaticProblem {
+                checks.append(
+                    QualityCheck(
+                        id: "QC.STATIC.NO_FILES_SCANNED",
+                        status: .blocked,
+                        message: "Static scan inspected zero regular files."
+                    )
+                )
+            } else if !hasStaticProblem {
                 checks.append(
                     QualityCheck(
                         id: "QC.STATIC.SCAN",
@@ -491,24 +566,6 @@ public enum QualityCommands {
         }
     }
 
-    private static func existenceCheck(
-        id: String,
-        url: URL,
-        message: String,
-        relativePath: String? = nil
-    ) -> QualityCheck {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            return QualityCheck(
-                id: id,
-                status: .blocked,
-                message: "Configured path does not exist.",
-                path: relativePath
-            )
-        }
-
-        return QualityCheck(id: id, status: .pass, message: message, path: relativePath)
-    }
-
     private static func directoryCheck(
         id: String,
         url: URL,
@@ -559,6 +616,14 @@ public enum QualityCommands {
     private static func relativePath(for url: URL, root: URL) -> String {
         let rootPath = root.standardizedFileURL.path
         let path = url.standardizedFileURL.path
+
+        if path == rootPath {
+            return "."
+        }
+
+        if rootPath == "/", path.hasPrefix("/") {
+            return String(path.dropFirst())
+        }
 
         guard path.hasPrefix(rootPath + "/") else {
             return "<outside-repository>"
