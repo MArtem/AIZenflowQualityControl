@@ -29,6 +29,19 @@ public struct QualityReport: Codable, Sendable {
     public init(command: String, checks: [QualityCheck]) {
         self.schemaVersion = 1
         self.command = command
+
+        guard !checks.isEmpty else {
+            self.checks = [
+                QualityCheck(
+                    id: "QC.REPORT.NO_CHECKS",
+                    status: .blocked,
+                    message: "A quality report cannot pass without executed checks."
+                )
+            ]
+            self.status = .blocked
+            return
+        }
+
         self.checks = checks
 
         if checks.contains(where: { $0.status == .fail }) {
@@ -46,6 +59,23 @@ private struct StaticPolicy: Decodable {
     let maximumFileBytes: Int
     let excludedDirectoryNames: [String]
     let forbiddenFileSuffixes: [String]
+
+    static func decode(from data: Data) throws -> StaticPolicy {
+        if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let allowedProperties: Set<String> = [
+                "schemaVersion",
+                "maximumFileBytes",
+                "excludedDirectoryNames",
+                "forbiddenFileSuffixes"
+            ]
+
+            guard Set(object.keys).isSubset(of: allowedProperties) else {
+                throw UnknownStaticPolicyPropertyError()
+            }
+        }
+
+        return try JSONDecoder().decode(StaticPolicy.self, from: data)
+    }
 
     func matchesForbiddenSuffix(_ pathComponent: String) -> Bool {
         let lowercasedComponent = pathComponent.lowercased()
@@ -111,6 +141,13 @@ private struct StaticPolicy: Decodable {
 
         return checks
     }
+}
+
+private struct UnknownStaticPolicyPropertyError: Error {}
+
+private enum StaticScanLimits {
+    static let maximumEntries = 100_000
+    static let maximumFindings = 1_000
 }
 
 private enum ProfileLoadResult {
@@ -292,7 +329,7 @@ public enum QualityCommands {
             let policy: StaticPolicy
             do {
                 let data = try Data(contentsOf: policyURL, options: [.mappedIfSafe])
-                policy = try JSONDecoder().decode(StaticPolicy.self, from: data)
+                policy = try StaticPolicy.decode(from: data)
             } catch {
                 return QualityReport(
                     command: "static",
@@ -331,20 +368,41 @@ public enum QualityCommands {
             }
 
             var scannedFileCount = 0
+            var scannedEntryCount = 0
+            var reportedFindingCount = 0
+            var scanLimitMessage: String?
 
-            for sourcePath in profile.sourcePaths {
+            func appendStaticCheck(_ check: QualityCheck) -> Bool {
+                checks.append(check)
+
+                guard check.status != .pass else {
+                    return true
+                }
+
+                reportedFindingCount += 1
+                if reportedFindingCount >= StaticScanLimits.maximumFindings {
+                    scanLimitMessage = "Static scan stopped after reaching the finding limit of \(StaticScanLimits.maximumFindings)."
+                    return false
+                }
+
+                return true
+            }
+
+            sourceLoop: for sourcePath in profile.sourcePaths {
                 guard let sourceURL = ProfileValidator.resolve(
                     relativePath: sourcePath,
                     under: repositoryRoot
                 ) else {
-                    checks.append(
+                    guard appendStaticCheck(
                         QualityCheck(
                             id: "QC.STATIC.SOURCE_PATH",
                             status: .fail,
                             message: "Configured source path escapes the repository root.",
                             path: sourcePath
                         )
-                    )
+                    ) else {
+                        break sourceLoop
+                    }
                     continue
                 }
 
@@ -354,7 +412,9 @@ public enum QualityCommands {
                     message: "Configured source path is scannable.",
                     relativePath: sourcePath
                 )
-                checks.append(sourceCheck)
+                guard appendStaticCheck(sourceCheck) else {
+                    break sourceLoop
+                }
 
                 guard sourceCheck.status == .pass else {
                     continue
@@ -366,9 +426,25 @@ public enum QualityCommands {
                     repositoryRoot: repositoryRoot,
                     relativePath: sourcePath
                 )
-                checks.append(boundaryCheck)
+                guard appendStaticCheck(boundaryCheck) else {
+                    break sourceLoop
+                }
 
                 guard boundaryCheck.status == .pass else {
+                    continue
+                }
+
+                if policy.matchesForbiddenSuffix(sourceURL.lastPathComponent) {
+                    guard appendStaticCheck(
+                        QualityCheck(
+                            id: "QC.STATIC.FORBIDDEN_ARTIFACT",
+                            status: .fail,
+                            message: "The configured source root is a forbidden generated or release artifact.",
+                            path: sourcePath
+                        )
+                    ) else {
+                        break sourceLoop
+                    }
                     continue
                 }
 
@@ -390,18 +466,26 @@ public enum QualityCommands {
                         return false
                     }
                 ) else {
-                    checks.append(
+                    guard appendStaticCheck(
                         QualityCheck(
                             id: "QC.STATIC.ENUMERATION_BLOCKED",
                             status: .blocked,
                             message: "The configured source path could not be enumerated.",
                             path: sourcePath
                         )
-                    )
+                    ) else {
+                        break sourceLoop
+                    }
                     continue
                 }
 
-                for case let fileURL as URL in enumerator {
+                entryLoop: for case let fileURL as URL in enumerator {
+                    guard scannedEntryCount < StaticScanLimits.maximumEntries else {
+                        scanLimitMessage = "Static scan stopped after reaching the entry limit of \(StaticScanLimits.maximumEntries)."
+                        break entryLoop
+                    }
+                    scannedEntryCount += 1
+
                     let relativePath = relativePath(for: fileURL, root: repositoryRoot)
 
                     do {
@@ -418,27 +502,31 @@ public enum QualityCommands {
                             if values.isDirectory == true {
                                 enumerator.skipDescendants()
                             }
-                            checks.append(
+                            guard appendStaticCheck(
                                 QualityCheck(
                                     id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW",
                                     status: .blocked,
                                     message: "Symbolic links require explicit boundary review.",
                                     path: relativePath
                                 )
-                            )
+                            ) else {
+                                break entryLoop
+                            }
                             continue
                         }
 
                         if values.isDirectory == true {
                             if policy.matchesForbiddenSuffix(fileURL.lastPathComponent) {
-                                checks.append(
+                                guard appendStaticCheck(
                                     QualityCheck(
                                         id: "QC.STATIC.FORBIDDEN_ARTIFACT",
                                         status: .fail,
                                         message: "Generated or release artifact is forbidden in source scope.",
                                         path: relativePath
                                     )
-                                )
+                                ) else {
+                                    break entryLoop
+                                }
                                 enumerator.skipDescendants()
                                 continue
                             }
@@ -456,48 +544,70 @@ public enum QualityCommands {
                         scannedFileCount += 1
 
                         if let size = values.fileSize, size > policy.maximumFileBytes {
-                            checks.append(
+                            guard appendStaticCheck(
                                 QualityCheck(
                                     id: "QC.STATIC.OVERSIZED_FILE",
                                     status: .fail,
                                     message: "File exceeds the configured maximum byte size.",
                                     path: relativePath
                                 )
-                            )
+                            ) else {
+                                break entryLoop
+                            }
                         }
 
                         if policy.matchesForbiddenSuffix(fileURL.lastPathComponent) {
-                            checks.append(
+                            guard appendStaticCheck(
                                 QualityCheck(
                                     id: "QC.STATIC.FORBIDDEN_ARTIFACT",
                                     status: .fail,
                                     message: "Generated or release artifact is forbidden in source scope.",
                                     path: relativePath
                                 )
-                            )
+                            ) else {
+                                break entryLoop
+                            }
                         }
                     } catch {
-                        checks.append(
+                        guard appendStaticCheck(
                             QualityCheck(
                                 id: "QC.STATIC.METADATA_BLOCKED",
                                 status: .blocked,
                                 message: "File metadata could not be read.",
                                 path: relativePath
                             )
-                        )
+                        ) else {
+                            break entryLoop
+                        }
                     }
                 }
 
                 if let enumerationBlockedPath {
-                    checks.append(
+                    guard appendStaticCheck(
                         QualityCheck(
                             id: "QC.STATIC.ENUMERATION_BLOCKED",
                             status: .blocked,
                             message: "Directory enumeration stopped because an entry could not be read.",
                             path: enumerationBlockedPath
                         )
-                    )
+                    ) else {
+                        break sourceLoop
+                    }
                 }
+
+                if scanLimitMessage != nil {
+                    break sourceLoop
+                }
+            }
+
+            if let scanLimitMessage {
+                checks.append(
+                    QualityCheck(
+                        id: "QC.STATIC.SCAN_LIMIT_REACHED",
+                        status: .blocked,
+                        message: scanLimitMessage
+                    )
+                )
             }
 
             let hasStaticProblem = checks.contains(where: {

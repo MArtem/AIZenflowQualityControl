@@ -91,6 +91,7 @@
     },
     "scheme": {
       "minLength": 1,
+      "pattern": "\\S",
       "type": "string"
     },
     "sourcePaths": {
@@ -125,6 +126,7 @@
       "allOf": [
         {
           "minLength": 1,
+          "pattern": "\\S",
           "type": "string"
         },
         {
