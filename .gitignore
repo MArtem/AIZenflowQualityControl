@@ -1,0 +1,14 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.xcresult
+*.xcarchive
+*.ipa
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.mobileprovision
