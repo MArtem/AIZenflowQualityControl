@@ -1,0 +1,131 @@
+name: Manual Static Quality Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-static-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static
+    runs-on: macos-15
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the selected revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record source and toolchain evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Manual Static Quality Check"
+            echo
+            echo "- Source SHA: \`$(git rev-parse HEAD)\`"
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- Runner: \`${RUNNER_OS} ${RUNNER_ARCH}\`"
+            echo
+            echo '```text'
+            swift --version
+            xcodebuild -version
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Validate Swift package manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift package dump-package > "${RUNNER_TEMP}/package.json"
+          python3 -m json.tool "${RUNNER_TEMP}/package.json" > /dev/null
+
+      - name: Typecheck QualityCore
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/module-cache"
+          xcrun swiftc \
+            -parse-as-library \
+            -warnings-as-errors \
+            -module-cache-path "${RUNNER_TEMP}/module-cache" \
+            -typecheck \
+            engine/Sources/QualityCore/ProjectProfile.swift \
+            engine/Sources/QualityCore/ProfileValidation.swift \
+            engine/Sources/QualityCore/QualityCommands.swift
+
+      - name: Parse QualityCLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun swiftc \
+            -warnings-as-errors \
+            -parse \
+            engine/Sources/QualityCLI/main.swift
+
+      - name: Validate machine-readable contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            python3 -m json.tool "${file}" > /dev/null
+          done < <(find schemas policies fixtures -type f -name '*.json' -print0)
+
+      - name: Reject oversized and forbidden artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . \
+            -name '.git' -prune -o \
+            -name '.build' -prune -o \
+            -name 'DerivedData' -prune -o \
+            -type f -size +5000000c -print \
+            > "${RUNNER_TEMP}/oversized-artifacts.txt"
+
+          find . \
+            -name '.git' -prune -o \
+            -name '.build' -prune -o \
+            -name 'DerivedData' -prune -o \
+            \( -name '*.xcresult' -o -name '*.xcarchive' -o -name '*.ipa' \) \
+            -print \
+            > "${RUNNER_TEMP}/forbidden-artifacts.txt"
+
+          if [[ -s "${RUNNER_TEMP}/oversized-artifacts.txt" ]]; then
+            echo "Files exceeding 5,000,000 bytes:" >&2
+            sed -n '1,50p' "${RUNNER_TEMP}/oversized-artifacts.txt" >&2
+            exit 1
+          fi
+
+          if [[ -s "${RUNNER_TEMP}/forbidden-artifacts.txt" ]]; then
+            echo "Forbidden generated or release artifacts:" >&2
+            sed -n '1,50p' "${RUNNER_TEMP}/forbidden-artifacts.txt" >&2
+            exit 1
+          fi
+
+      - name: Check branch diff whitespace
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          default_branch="origin/${DEFAULT_BRANCH}"
+          merge_base="$(git merge-base HEAD "${default_branch}")"
+          git diff --check "${merge_base}"..HEAD
+
+      - name: Record successful result
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo
+            echo "- Result: \`PASS\`"
+            echo "- Mode: \`static\`"
+            echo "- Tests, application builds, Simulator/device work, and paid services: not run"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -7,9 +7,10 @@ manual workflow definitions.
 ## Current Status
 
 Stage 5 is complete at its approved scope. The user-owned Swift build and focused command matrix
-passed on 2026-07-29. The repository still contains no test suite, GitHub Actions workflow, hook,
-application profile, or application integration. Current command reports are local diagnostics,
-not the versioned evidence model planned for a later stage.
+passed on 2026-07-29. The repository now contains one manually triggered, advisory static
+self-check workflow. It still contains no test suite, automatic push/PR workflow, hook,
+application profile, or application integration. Current command reports and the static workflow
+summary are bounded diagnostics, not the versioned evidence model planned for a later stage.
 
 ## Authority Boundary
 
@@ -30,7 +31,8 @@ results, and residual risk.
 - `fixtures/` — synthetic positive, negative, and adversarial inputs.
 - `tests/` — future verifier self-tests, added only with explicit permission.
 - `bootstrap/` — future dry-run adoption and reversible migration tooling.
-- `workflows/` — future manually triggered, advisory workflow definitions.
+- `.github/workflows/` — active GitHub workflow definitions.
+- `workflows/` — workflow policy, scope, and operator instructions.
 - `docs/` — repository ownership, release policy, and threat model.
 
 ## Hard Rules
