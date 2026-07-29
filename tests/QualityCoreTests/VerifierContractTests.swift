@@ -107,9 +107,11 @@ enum InvalidProfileInput: String, CaseIterable, Sendable {
     }
 }
 
-private struct TemporaryProfile {
-    let directory: URL
+private final class TemporaryProfile {
     let url: URL
+    private let directoryName: String
+    private var fixtureRootDescriptor: Int32
+    private var directoryDescriptor: Int32
 
     init(data: Data) throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath, isDirectory: false)
@@ -117,68 +119,221 @@ private struct TemporaryProfile {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .standardizedFileURL
-        let cacheDirectory = repositoryRoot
-        .appendingPathComponent(".quality-control-cache", isDirectory: true)
-        let cacheRoot = cacheDirectory
-        .appendingPathComponent("test-fixtures", isDirectory: true)
-
-        try Self.ensurePlainDirectory(at: cacheDirectory)
-        try Self.ensurePlainDirectory(at: cacheRoot)
-
         let resolvedRepositoryRoot = repositoryRoot.resolvingSymlinksInPath().standardizedFileURL
-        let resolvedCacheRoot = cacheRoot.resolvingSymlinksInPath().standardizedFileURL
-        guard Self.isStrictDescendant(resolvedCacheRoot, of: resolvedRepositoryRoot) else {
-            throw FixtureBoundaryError()
+        let cacheDirectory = repositoryRoot
+            .appendingPathComponent(".quality-control-cache", isDirectory: true)
+        let cacheRoot = cacheDirectory
+            .appendingPathComponent("test-fixtures", isDirectory: true)
+
+        let repositoryDescriptor = try Self.openPinnedDirectory(at: repositoryRoot)
+        defer { Darwin.close(repositoryDescriptor) }
+        try Self.validatePinnedDirectory(
+            repositoryDescriptor,
+            at: repositoryRoot,
+            repositoryRoot: resolvedRepositoryRoot,
+            allowsRepositoryRoot: true
+        )
+
+        let cacheDescriptor = try Self.openOrCreatePlainDirectory(
+            named: cacheDirectory.lastPathComponent,
+            at: cacheDirectory,
+            parentDescriptor: repositoryDescriptor,
+            repositoryRoot: resolvedRepositoryRoot
+        )
+        defer { Darwin.close(cacheDescriptor) }
+
+        let openedFixtureRootDescriptor = try Self.openOrCreatePlainDirectory(
+            named: cacheRoot.lastPathComponent,
+            at: cacheRoot,
+            parentDescriptor: cacheDescriptor,
+            repositoryRoot: resolvedRepositoryRoot
+        )
+        var ownsFixtureRootDescriptor = true
+        defer {
+            if ownsFixtureRootDescriptor {
+                Darwin.close(openedFixtureRootDescriptor)
+            }
         }
 
-        let createdDirectory = try Self.createUniqueDirectory(in: cacheRoot)
-        let createdURL = createdDirectory.appendingPathComponent("profile.json", isDirectory: false)
+        let created = try Self.createUniqueDirectory(
+            in: cacheRoot,
+            parentDescriptor: openedFixtureRootDescriptor,
+            repositoryRoot: resolvedRepositoryRoot
+        )
+        var ownsDirectoryDescriptor = true
+        defer {
+            if ownsDirectoryDescriptor {
+                Darwin.close(created.descriptor)
+            }
+        }
+        let createdURL = created.url.appendingPathComponent("profile.json", isDirectory: false)
 
         do {
             try Self.writePinned(
                 data,
                 fileName: createdURL.lastPathComponent,
-                in: createdDirectory,
+                directoryDescriptor: created.descriptor
+            )
+            try Self.validatePinnedDirectory(
+                created.descriptor,
+                at: created.url,
                 repositoryRoot: resolvedRepositoryRoot
             )
         } catch {
-            do {
-                try FileManager.default.removeItem(at: createdDirectory)
-            } catch let cleanupError {
+            let cleanupError = Self.removeCreatedFixture(
+                fileName: createdURL.lastPathComponent,
+                directoryName: created.name,
+                directoryDescriptor: created.descriptor,
+                parentDescriptor: openedFixtureRootDescriptor,
+                missingFileIsAllowed: true
+            )
+            ownsDirectoryDescriptor = false
+            if let cleanupError {
                 throw FixtureCleanupError(primary: error, cleanup: cleanupError)
             }
             throw error
         }
 
-        directory = createdDirectory
         url = createdURL
+        directoryName = created.name
+        fixtureRootDescriptor = openedFixtureRootDescriptor
+        directoryDescriptor = created.descriptor
+        ownsFixtureRootDescriptor = false
+        ownsDirectoryDescriptor = false
     }
 
     func remove() throws {
-        try FileManager.default.removeItem(at: directory)
+        guard directoryDescriptor >= 0, fixtureRootDescriptor >= 0 else {
+            return
+        }
+
+        let cleanupError = Self.removeCreatedFixture(
+            fileName: url.lastPathComponent,
+            directoryName: directoryName,
+            directoryDescriptor: directoryDescriptor,
+            parentDescriptor: fixtureRootDescriptor,
+            missingFileIsAllowed: false
+        )
+        directoryDescriptor = -1
+
+        let closeResult = Darwin.close(fixtureRootDescriptor)
+        let closeError = closeResult == 0
+            ? nil
+            : FixtureFileSystemError(operation: "close", code: errno)
+        fixtureRootDescriptor = -1
+
+        if let cleanupError {
+            throw cleanupError
+        }
+        if let closeError {
+            throw closeError
+        }
     }
 
-    private static func ensurePlainDirectory(at url: URL) throws {
-        if mkdir(url.path, S_IRWXU) != 0 {
+    deinit {
+        if directoryDescriptor >= 0 {
+            Darwin.close(directoryDescriptor)
+        }
+        if fixtureRootDescriptor >= 0 {
+            Darwin.close(fixtureRootDescriptor)
+        }
+    }
+
+    private static func openPinnedDirectory(at url: URL) throws -> Int32 {
+        let descriptor = Darwin.open(
+            url.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw FixtureFileSystemError(operation: "open", code: errno)
+        }
+        return descriptor
+    }
+
+    private static func openOrCreatePlainDirectory(
+        named name: String,
+        at url: URL,
+        parentDescriptor: Int32,
+        repositoryRoot: URL
+    ) throws -> Int32 {
+        if mkdirat(parentDescriptor, name, S_IRWXU) != 0 {
             let errorNumber = errno
             guard errorNumber == EEXIST else {
-                throw FixtureFileSystemError(operation: "mkdir", code: errorNumber)
+                throw FixtureFileSystemError(operation: "mkdirat", code: errorNumber)
             }
         }
 
-        _ = try plainDirectoryStatus(at: url)
+        let descriptor = openat(
+            parentDescriptor,
+            name,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw FixtureFileSystemError(operation: "openat", code: errno)
+        }
+
+        do {
+            try validatePinnedDirectory(
+                descriptor,
+                at: url,
+                repositoryRoot: repositoryRoot
+            )
+            return descriptor
+        } catch {
+            Darwin.close(descriptor)
+            throw error
+        }
     }
 
-    private static func createUniqueDirectory(in parent: URL) throws -> URL {
+    private static func createUniqueDirectory(
+        in parent: URL,
+        parentDescriptor: Int32,
+        repositoryRoot: URL
+    ) throws -> (name: String, url: URL, descriptor: Int32) {
         for _ in 0..<10 {
-            let candidate = parent.appendingPathComponent(UUID().uuidString, isDirectory: true)
-            if mkdir(candidate.path, S_IRWXU) == 0 {
-                return candidate
+            let name = UUID().uuidString
+            let candidate = parent.appendingPathComponent(name, isDirectory: true)
+            if mkdirat(parentDescriptor, name, S_IRWXU) == 0 {
+                let descriptor = openat(
+                    parentDescriptor,
+                    name,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+                guard descriptor >= 0 else {
+                    let primaryError = FixtureFileSystemError(operation: "openat", code: errno)
+                    if unlinkat(parentDescriptor, name, AT_REMOVEDIR) != 0 {
+                        let cleanupError = FixtureFileSystemError(
+                            operation: "unlinkat",
+                            code: errno
+                        )
+                        throw FixtureCleanupError(primary: primaryError, cleanup: cleanupError)
+                    }
+                    throw primaryError
+                }
+
+                do {
+                    try validatePinnedDirectory(
+                        descriptor,
+                        at: candidate,
+                        repositoryRoot: repositoryRoot
+                    )
+                    return (name, candidate, descriptor)
+                } catch {
+                    Darwin.close(descriptor)
+                    if unlinkat(parentDescriptor, name, AT_REMOVEDIR) != 0 {
+                        let cleanupError = FixtureFileSystemError(
+                            operation: "unlinkat",
+                            code: errno
+                        )
+                        throw FixtureCleanupError(primary: error, cleanup: cleanupError)
+                    }
+                    throw error
+                }
             }
 
             let errorNumber = errno
             guard errorNumber == EEXIST else {
-                throw FixtureFileSystemError(operation: "mkdir", code: errorNumber)
+                throw FixtureFileSystemError(operation: "mkdirat", code: errorNumber)
             }
         }
 
@@ -188,23 +343,8 @@ private struct TemporaryProfile {
     private static func writePinned(
         _ data: Data,
         fileName: String,
-        in directory: URL,
-        repositoryRoot: URL
+        directoryDescriptor: Int32
     ) throws {
-        let directoryDescriptor = open(
-            directory.path,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        )
-        guard directoryDescriptor >= 0 else {
-            throw FixtureFileSystemError(operation: "open", code: errno)
-        }
-        defer { close(directoryDescriptor) }
-
-        var openedStatus = stat()
-        guard fstat(directoryDescriptor, &openedStatus) == 0 else {
-            throw FixtureFileSystemError(operation: "fstat", code: errno)
-        }
-
         let fileDescriptor = openat(
             directoryDescriptor,
             fileName,
@@ -218,28 +358,63 @@ private struct TemporaryProfile {
         let handle = FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: true)
         try handle.write(contentsOf: data)
         try handle.close()
-
-        let currentStatus = try plainDirectoryStatus(at: directory)
-        guard currentStatus.st_dev == openedStatus.st_dev,
-              currentStatus.st_ino == openedStatus.st_ino else {
-            throw FixtureBoundaryError()
-        }
-
-        let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
-        guard isStrictDescendant(resolvedDirectory, of: repositoryRoot) else {
-            throw FixtureBoundaryError()
-        }
     }
 
-    private static func plainDirectoryStatus(at url: URL) throws -> stat {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else {
+    private static func removeCreatedFixture(
+        fileName: String,
+        directoryName: String,
+        directoryDescriptor: Int32,
+        parentDescriptor: Int32,
+        missingFileIsAllowed: Bool
+    ) -> Error? {
+        var firstError: Error?
+
+        if unlinkat(directoryDescriptor, fileName, 0) != 0 {
+            let errorNumber = errno
+            if !(missingFileIsAllowed && errorNumber == ENOENT) {
+                firstError = FixtureFileSystemError(operation: "unlinkat", code: errorNumber)
+            }
+        }
+
+        if Darwin.close(directoryDescriptor) != 0, firstError == nil {
+            firstError = FixtureFileSystemError(operation: "close", code: errno)
+        }
+
+        if unlinkat(parentDescriptor, directoryName, AT_REMOVEDIR) != 0, firstError == nil {
+            firstError = FixtureFileSystemError(operation: "unlinkat", code: errno)
+        }
+
+        return firstError
+    }
+
+    private static func validatePinnedDirectory(
+        _ descriptor: Int32,
+        at url: URL,
+        repositoryRoot: URL,
+        allowsRepositoryRoot: Bool = false
+    ) throws {
+        var descriptorStatus = stat()
+        guard fstat(descriptor, &descriptorStatus) == 0 else {
+            throw FixtureFileSystemError(operation: "fstat", code: errno)
+        }
+
+        var pathStatus = stat()
+        guard lstat(url.path, &pathStatus) == 0 else {
             throw FixtureFileSystemError(operation: "lstat", code: errno)
         }
-        guard status.st_mode & S_IFMT == S_IFDIR else {
+        guard pathStatus.st_mode & S_IFMT == S_IFDIR,
+              pathStatus.st_dev == descriptorStatus.st_dev,
+              pathStatus.st_ino == descriptorStatus.st_ino else {
             throw FixtureBoundaryError()
         }
-        return status
+
+        let resolvedDirectory = url.resolvingSymlinksInPath().standardizedFileURL
+        let isAllowed = allowsRepositoryRoot
+            ? resolvedDirectory.pathComponents == repositoryRoot.pathComponents
+            : isStrictDescendant(resolvedDirectory, of: repositoryRoot)
+        guard isAllowed else {
+            throw FixtureBoundaryError()
+        }
     }
 
     private static func isStrictDescendant(_ candidate: URL, of root: URL) -> Bool {
