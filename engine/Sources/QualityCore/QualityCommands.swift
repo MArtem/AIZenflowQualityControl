@@ -111,6 +111,21 @@ private struct StaticPolicy {
 
     func validationChecks() -> [QualityCheck] {
         var checks: [QualityCheck] = []
+        let excludedDirectoryNamesAreWithinListLimit =
+            excludedDirectoryNames.count <= StaticPolicyLimits.maximumListItems
+        let forbiddenFileSuffixesAreWithinListLimit =
+            forbiddenFileSuffixes.count <= StaticPolicyLimits.maximumListItems
+        let excludedDirectoryNamesAreValid = !excludedDirectoryNames.contains {
+            $0.isEmpty || $0.contains("/")
+        }
+        let forbiddenFileSuffixesAreValid = !forbiddenFileSuffixes.contains {
+            !$0.hasPrefix(".") || $0.count < 2 || $0.contains("/")
+        }
+        let excludedDirectoryNamesAreUnique =
+            Set(excludedDirectoryNames).count == excludedDirectoryNames.count
+        let forbiddenFileSuffixesAreUnique =
+            Set(normalizedForbiddenFileSuffixes).count
+                == normalizedForbiddenFileSuffixes.count
 
         if schemaVersion != 1 {
             checks.append(
@@ -130,10 +145,18 @@ private struct StaticPolicy {
                     message: "maximumFileBytes must be greater than zero."
                 )
             )
+        } else if maximumFileBytes > StaticPolicyLimits.maximumFileBytes {
+            checks.append(
+                QualityCheck(
+                    id: "QC.POLICY.FILE_LIMIT_WEAKENING",
+                    status: .fail,
+                    message: "maximumFileBytes may not exceed the immutable limit of \(StaticPolicyLimits.maximumFileBytes)."
+                )
+            )
         }
 
-        if excludedDirectoryNames.count > StaticPolicyLimits.maximumListItems
-            || forbiddenFileSuffixes.count > StaticPolicyLimits.maximumListItems {
+        if !excludedDirectoryNamesAreWithinListLimit
+            || !forbiddenFileSuffixesAreWithinListLimit {
             checks.append(
                 QualityCheck(
                     id: "QC.POLICY.LIST_LIMIT",
@@ -143,7 +166,7 @@ private struct StaticPolicy {
             )
         }
 
-        if excludedDirectoryNames.contains(where: { $0.isEmpty || $0.contains("/") }) {
+        if !excludedDirectoryNamesAreValid {
             checks.append(
                 QualityCheck(
                     id: "QC.POLICY.INVALID_EXCLUDED_DIRECTORY",
@@ -153,9 +176,7 @@ private struct StaticPolicy {
             )
         }
 
-        if forbiddenFileSuffixes.contains(where: {
-            !$0.hasPrefix(".") || $0.count < 2 || $0.contains("/")
-        }) {
+        if !forbiddenFileSuffixesAreValid {
             checks.append(
                 QualityCheck(
                     id: "QC.POLICY.INVALID_FILE_SUFFIX",
@@ -165,7 +186,7 @@ private struct StaticPolicy {
             )
         }
 
-        if Set(excludedDirectoryNames).count != excludedDirectoryNames.count {
+        if !excludedDirectoryNamesAreUnique {
             checks.append(
                 QualityCheck(
                     id: "QC.POLICY.DUPLICATE_EXCLUDED_DIRECTORY",
@@ -175,13 +196,42 @@ private struct StaticPolicy {
             )
         }
 
-        if Set(normalizedForbiddenFileSuffixes).count
-            != normalizedForbiddenFileSuffixes.count {
+        if !forbiddenFileSuffixesAreUnique {
             checks.append(
                 QualityCheck(
                     id: "QC.POLICY.DUPLICATE_FILE_SUFFIX",
                     status: .fail,
                     message: "Forbidden file suffixes must be unique ignoring case."
+                )
+            )
+        }
+
+        if excludedDirectoryNamesAreWithinListLimit
+            && excludedDirectoryNamesAreValid
+            && excludedDirectoryNamesAreUnique
+            && !Set(excludedDirectoryNames).isSubset(
+                of: StaticPolicyLimits.allowedExcludedDirectoryNames
+            ) {
+            checks.append(
+                QualityCheck(
+                    id: "QC.POLICY.EXCLUDED_DIRECTORY_WEAKENING",
+                    status: .fail,
+                    message: "Static policy may only exclude directories allowed by the immutable engine policy."
+                )
+            )
+        }
+
+        if forbiddenFileSuffixesAreWithinListLimit
+            && forbiddenFileSuffixesAreValid
+            && forbiddenFileSuffixesAreUnique
+            && !StaticPolicyLimits.requiredForbiddenFileSuffixes.isSubset(
+                of: Set(normalizedForbiddenFileSuffixes)
+            ) {
+            checks.append(
+                QualityCheck(
+                    id: "QC.POLICY.FORBIDDEN_SUFFIX_WEAKENING",
+                    status: .fail,
+                    message: "Static policy must retain every forbidden suffix required by the immutable engine policy."
                 )
             )
         }
@@ -204,6 +254,17 @@ private struct UnknownStaticPolicyPropertyError: Error {}
 
 private enum StaticPolicyLimits {
     static let maximumListItems = 256
+    static let maximumFileBytes = 5_000_000
+    static let allowedExcludedDirectoryNames: Set<String> = [
+        ".git",
+        ".build",
+        "DerivedData"
+    ]
+    static let requiredForbiddenFileSuffixes: Set<String> = [
+        ".xcresult",
+        ".xcarchive",
+        ".ipa"
+    ]
 }
 
 struct StaticScanLimits: Sendable {

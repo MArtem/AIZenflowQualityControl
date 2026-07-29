@@ -42,6 +42,25 @@ struct StaticPolicyContractTests {
         #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
     }
 
+    @Test(
+        "Policy weakening fails before repository scanning",
+        arguments: WeakeningStaticPolicyContract.allCases
+    )
+    func policyWeakeningFails(_ input: WeakeningStaticPolicyContract) throws {
+        let policy = try TemporaryProfile(data: try input.data())
+        defer { expectSuccessfulRemoval(of: policy) }
+
+        let report = QualityCommands.staticScan(
+            profileURL: validProfileURL,
+            policyURL: policy.url,
+            repositoryRoot: packageRootURL
+        )
+
+        #expect(report.status.rawValue == QualityStatus.fail.rawValue)
+        #expect(report.checks.map(\.id) == [input.expectedCheckID])
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
     @Test("A source scope with no regular files is blocked")
     func emptySourceScopeIsBlocked() throws {
         let profile = try makeScanProfile()
@@ -362,9 +381,9 @@ enum InvalidStaticPolicyContract: String, CaseIterable, Sendable {
 
     func data() throws -> Data {
         var schemaVersion = 1
-        var maximumFileBytes = 10
-        var excludedDirectoryNames: [String] = []
-        var forbiddenFileSuffixes: [String] = []
+        var maximumFileBytes = 5_000_000
+        var excludedDirectoryNames = [".git", ".build", "DerivedData"]
+        var forbiddenFileSuffixes = [".xcresult", ".xcarchive", ".ipa"]
 
         switch self {
         case .unsupportedSchema:
@@ -389,6 +408,36 @@ enum InvalidStaticPolicyContract: String, CaseIterable, Sendable {
             excludedDirectoryNames: excludedDirectoryNames,
             forbiddenFileSuffixes: forbiddenFileSuffixes
         )
+    }
+}
+
+enum WeakeningStaticPolicyContract: String, CaseIterable, Sendable {
+    case excessiveFileLimit
+    case unauthorizedExcludedDirectory
+    case missingRequiredFileSuffix
+
+    var expectedCheckID: String {
+        switch self {
+        case .excessiveFileLimit:
+            "QC.POLICY.FILE_LIMIT_WEAKENING"
+        case .unauthorizedExcludedDirectory:
+            "QC.POLICY.EXCLUDED_DIRECTORY_WEAKENING"
+        case .missingRequiredFileSuffix:
+            "QC.POLICY.FORBIDDEN_SUFFIX_WEAKENING"
+        }
+    }
+
+    func data() throws -> Data {
+        switch self {
+        case .excessiveFileLimit:
+            try policyData(maximumFileBytes: 5_000_001)
+        case .unauthorizedExcludedDirectory:
+            try policyData(
+                excludedDirectoryNames: [".git", ".build", "DerivedData", "Generated"]
+            )
+        case .missingRequiredFileSuffix:
+            try policyData(forbiddenFileSuffixes: [".xcresult", ".xcarchive"])
+        }
     }
 }
 
