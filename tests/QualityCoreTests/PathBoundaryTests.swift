@@ -4,6 +4,25 @@ import Testing
 
 @Suite("Path and symbolic-link verifier boundaries")
 struct PathBoundaryTests {
+    @Test("A failed repeated fixture write preserves the existing entry")
+    func repeatedFixtureWritePreservesExistingEntry() throws {
+        let profile = try makeProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        let original = Data("original".utf8)
+        let relativePath = "repository/existing.txt"
+        try profile.write(original, at: relativePath)
+
+        #expect(throws: Error.self) {
+            try profile.write(Data("replacement".utf8), at: relativePath)
+        }
+
+        let existingURL = profile.directory.appendingPathComponent(
+            relativePath,
+            isDirectory: false
+        )
+        #expect(try Data(contentsOf: existingURL) == original)
+    }
+
     @Test("Lexical traversal in project and source paths never passes")
     func lexicalTraversalFails() {
         let report = QualityCommands.validateProfile(at: invalidTraversalProfileURL)

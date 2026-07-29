@@ -290,22 +290,11 @@ final class TemporaryProfile {
         )
         defer { Darwin.close(parent.descriptor) }
 
-        do {
-            try Self.writePinned(
-                data,
-                fileName: parent.leafName,
-                directoryDescriptor: parent.descriptor
-            )
-        } catch {
-            let primaryError = error
-            if unlinkat(parent.descriptor, parent.leafName, 0) != 0, errno != ENOENT {
-                throw FixtureCleanupError(
-                    primary: primaryError,
-                    cleanup: FixtureFileSystemError(operation: "unlinkat", code: errno)
-                )
-            }
-            throw primaryError
-        }
+        try Self.writePinned(
+            data,
+            fileName: parent.leafName,
+            directoryDescriptor: parent.descriptor
+        )
 
         createdItems.append(FixtureItem(relativePath: relativePath, isDirectory: false))
     }
@@ -488,8 +477,19 @@ final class TemporaryProfile {
         }
 
         let handle = FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: true)
-        try handle.write(contentsOf: data)
-        try handle.close()
+        do {
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } catch {
+            let primaryError = error
+            if unlinkat(directoryDescriptor, fileName, 0) != 0, errno != ENOENT {
+                throw FixtureCleanupError(
+                    primary: primaryError,
+                    cleanup: FixtureFileSystemError(operation: "unlinkat", code: errno)
+                )
+            }
+            throw primaryError
+        }
     }
 
     private static func removeCreatedFixture(
