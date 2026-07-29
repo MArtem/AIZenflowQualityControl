@@ -6,11 +6,13 @@ manual workflow definitions.
 
 ## Current Status
 
-Stage 5 is complete at its approved scope. The user-owned Swift build and focused command matrix
-passed on 2026-07-29. The repository now contains one manually triggered, advisory static
-self-check workflow. It still contains no test suite, automatic push/PR workflow, hook,
-application profile, or application integration. Current command reports and the static workflow
-summary are bounded diagnostics, not the versioned evidence model planned for a later stage.
+Stage 5 is complete at its approved scope, and Stage 6A adds the first bounded verifier contract
+suite. The user-owned Swift build, focused command matrix, and contained package test run passed on
+2026-07-29. The repository now contains one manually triggered, advisory static self-check workflow
+and Swift Testing coverage for result aggregation and profile validation. It still contains no
+automatic push/PR workflow, hook, application profile, or application integration. Current command
+reports, test results, and the static workflow summary are bounded diagnostics, not the versioned
+evidence model planned for a later stage.
 
 ## Authority Boundary
 
@@ -29,7 +31,7 @@ results, and residual risk.
 - `policies/` — executable policy definitions with stable identifiers.
 - `adapters/` — typed integrations for supported project and toolchain surfaces.
 - `fixtures/` — synthetic positive, negative, and adversarial inputs.
-- `tests/` — future verifier self-tests, added only with explicit permission.
+- `tests/` — active verifier self-tests, expanded only with explicit permission.
 - `bootstrap/` — future dry-run adoption and reversible migration tooling.
 - `.github/workflows/` — active GitHub workflow definitions.
 - `workflows/` — workflow policy, scope, and operator instructions.
