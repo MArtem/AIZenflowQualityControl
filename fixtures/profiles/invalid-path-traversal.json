@@ -1,0 +1,25 @@
+{
+  "mode": "controlled",
+  "permissions": {
+    "githubExecution": "manual",
+    "localTestExecution": "ask",
+    "performanceOrInstruments": "ask",
+    "simulatorOrDevice": "ask",
+    "testCreation": "ask",
+    "testModification": "ask",
+    "uiTests": "ask"
+  },
+  "project": {
+    "kind": "xcodeproj",
+    "path": "../EscapedProject.xcodeproj"
+  },
+  "sandbox": {
+    "cache": "/outside-workspace/cache",
+    "root": "/workspace"
+  },
+  "schemaVersion": 1,
+  "scheme": "ExampleProject",
+  "sourcePaths": [
+    "../Sources"
+  ]
+}

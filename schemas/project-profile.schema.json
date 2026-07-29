@@ -1,0 +1,144 @@
+{
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/project-profile.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "enum": [
+        "prototype",
+        "controlled",
+        "production"
+      ]
+    },
+    "permissions": {
+      "additionalProperties": false,
+      "properties": {
+        "githubExecution": {
+          "enum": [
+            "off",
+            "manual"
+          ]
+        },
+        "localTestExecution": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "performanceOrInstruments": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "simulatorOrDevice": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "testCreation": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "testModification": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "uiTests": {
+          "$ref": "#/$defs/permissionDecision"
+        }
+      },
+      "required": [
+        "testCreation",
+        "testModification",
+        "localTestExecution",
+        "githubExecution",
+        "uiTests",
+        "simulatorOrDevice",
+        "performanceOrInstruments"
+      ],
+      "type": "object"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "xcodeproj",
+            "xcworkspace"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "kind",
+        "path"
+      ],
+      "type": "object"
+    },
+    "sandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "cache": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "root": {
+          "$ref": "#/$defs/absolutePath"
+        }
+      },
+      "required": [
+        "root",
+        "cache"
+      ],
+      "type": "object"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "scheme": {
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "sourcePaths": {
+      "items": {
+        "$ref": "#/$defs/relativePath"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "project",
+    "scheme",
+    "sourcePaths",
+    "mode",
+    "permissions",
+    "sandbox"
+  ],
+  "title": "AIZenflow Quality Control Project Profile",
+  "type": "object",
+  "$defs": {
+    "absolutePath": {
+      "minLength": 1,
+      "pattern": "^/",
+      "type": "string"
+    },
+    "permissionDecision": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "relativePath": {
+      "allOf": [
+        {
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        {
+          "not": {
+            "pattern": "^(?:/|~)|(?:^|/)\\.\\.(?:/|$)"
+          }
+        }
+      ]
+    }
+  }
+}

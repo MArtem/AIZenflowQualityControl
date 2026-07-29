@@ -1,0 +1,147 @@
+name: Manual Static Quality Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-static-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static
+    runs-on: macos-15
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the selected revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record source and toolchain evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Manual Static Quality Check"
+            echo
+            echo "- Source SHA: \`$(git rev-parse HEAD)\`"
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- Runner: \`${RUNNER_OS} ${RUNNER_ARCH}\`"
+            echo
+            echo '```text'
+            swift --version
+            xcodebuild -version
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Validate Swift package manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift package dump-package > "${RUNNER_TEMP}/package.json"
+          python3 -m json.tool "${RUNNER_TEMP}/package.json" > /dev/null
+
+      - name: Validate machine-readable contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          contract_list="${RUNNER_TEMP}/machine-contracts.txt"
+          find schemas policies fixtures -type f -name '*.json' -print0 > "${contract_list}"
+          if [[ ! -s "${contract_list}" ]]; then
+            echo "No machine-readable contracts were found." >&2
+            exit 1
+          fi
+          while IFS= read -r -d '' file; do
+            python3 -m json.tool "${file}" > /dev/null
+          done < "${contract_list}"
+
+      - name: Run policy-driven repository self-check
+        shell: bash
+        env:
+          QC_PROFILE_PATH: ${{ runner.temp }}/quality-control-self-profile.json
+          QC_REPORT_PATH: ${{ runner.temp }}/quality-control-self-report.json
+          QC_SANDBOX_ROOT: ${{ runner.temp }}/quality-control-sandbox
+        run: |
+          set -euo pipefail
+          mkdir -p "${QC_SANDBOX_ROOT}/cache"
+          python3 - <<'PY'
+          import json
+          import os
+
+          profile = {
+              "schemaVersion": 1,
+              "project": {"kind": "xcodeproj", "path": "QualityControl.xcodeproj"},
+              "scheme": "QualityControl",
+              "sourcePaths": ["."],
+              "mode": "controlled",
+              "permissions": {
+                  "testCreation": "deny",
+                  "testModification": "deny",
+                  "localTestExecution": "deny",
+                  "githubExecution": "manual",
+                  "uiTests": "deny",
+                  "simulatorOrDevice": "deny",
+                  "performanceOrInstruments": "deny",
+              },
+              "sandbox": {
+                  "root": os.environ["QC_SANDBOX_ROOT"],
+                  "cache": os.path.join(os.environ["QC_SANDBOX_ROOT"], "cache"),
+              },
+          }
+          with open(os.environ["QC_PROFILE_PATH"], "w", encoding="utf-8") as output:
+              json.dump(profile, output, sort_keys=True)
+          PY
+
+          swift run \
+            --scratch-path "${RUNNER_TEMP}/swift-scratch" \
+            -Xswiftc -warnings-as-errors \
+            quality static \
+            --profile "${QC_PROFILE_PATH}" \
+            --policy policies/static-policy.json \
+            --repository-root "${GITHUB_WORKSPACE}" \
+            > "${QC_REPORT_PATH}"
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["QC_REPORT_PATH"], encoding="utf-8") as source:
+              report = json.load(source)
+          if report.get("status") != "PASS":
+              raise SystemExit("Policy-driven repository self-check did not report PASS")
+          PY
+
+      - name: Check branch diff whitespace
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          default_branch="origin/${DEFAULT_BRANCH}"
+          if [[ "$(git rev-parse HEAD)" == "$(git rev-parse "${default_branch}")" ]]; then
+            if git rev-parse HEAD^ >/dev/null 2>&1; then
+              comparison_base="HEAD^"
+            else
+              comparison_base="$(git hash-object -t tree /dev/null)"
+            fi
+          else
+            comparison_base="$(git merge-base HEAD "${default_branch}")"
+          fi
+          git diff --check "${comparison_base}" HEAD
+
+      - name: Record successful result
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo
+            echo "- Result: \`PASS\`"
+            echo "- Mode: \`static\`"
+            echo "- Tests, application builds, Simulator/device work, and paid services: not run"
+          } >> "${GITHUB_STEP_SUMMARY}"
