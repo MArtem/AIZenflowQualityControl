@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Darwin
 @testable import QualityCore
 
 @Suite("Verifier result contracts")
@@ -29,10 +30,20 @@ struct VerifierContractTests {
             command: "test",
             checks: [passingCheck, blockedCheck, failingCheck]
         )
+        let blockedBeforePassingReport = QualityReport(
+            command: "test",
+            checks: [blockedCheck, passingCheck]
+        )
+        let failingBeforeLowerPriorityReport = QualityReport(
+            command: "test",
+            checks: [failingCheck, blockedCheck, passingCheck]
+        )
 
         #expect(passingReport.status.rawValue == QualityStatus.pass.rawValue)
         #expect(blockedReport.status.rawValue == QualityStatus.blocked.rawValue)
         #expect(failingReport.status.rawValue == QualityStatus.fail.rawValue)
+        #expect(blockedBeforePassingReport.status.rawValue == QualityStatus.blocked.rawValue)
+        #expect(failingBeforeLowerPriorityReport.status.rawValue == QualityStatus.fail.rawValue)
     }
 
     @Test(
@@ -41,7 +52,11 @@ struct VerifierContractTests {
     )
     func rejectedProfileNeverPasses(_ input: InvalidProfileInput) throws {
         let temporaryProfile = try TemporaryProfile(data: input.data)
-        defer { temporaryProfile.remove() }
+        defer {
+            #expect(throws: Never.self) {
+                try temporaryProfile.remove()
+            }
+        }
 
         let report = QualityCommands.validateProfile(at: temporaryProfile.url)
 
@@ -57,7 +72,11 @@ struct VerifierContractTests {
     @Test("A valid closed profile remains the positive control")
     func validProfilePasses() throws {
         let temporaryProfile = try TemporaryProfile(data: Data(validProfileJSON.utf8))
-        defer { temporaryProfile.remove() }
+        defer {
+            #expect(throws: Never.self) {
+                try temporaryProfile.remove()
+            }
+        }
 
         let report = QualityCommands.validateProfile(at: temporaryProfile.url)
 
@@ -112,39 +131,115 @@ private struct TemporaryProfile {
             throw FixtureBoundaryError()
         }
 
-        directory = cacheRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        url = directory.appendingPathComponent("profile.json", isDirectory: false)
+        let createdDirectory = try Self.createUniqueDirectory(in: cacheRoot)
+        let createdURL = createdDirectory.appendingPathComponent("profile.json", isDirectory: false)
 
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: false
-        )
-
-        let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
-        guard Self.isStrictDescendant(resolvedDirectory, of: resolvedRepositoryRoot) else {
-            throw FixtureBoundaryError()
+        do {
+            try Self.writePinned(
+                data,
+                fileName: createdURL.lastPathComponent,
+                in: createdDirectory,
+                repositoryRoot: resolvedRepositoryRoot
+            )
+        } catch {
+            do {
+                try FileManager.default.removeItem(at: createdDirectory)
+            } catch let cleanupError {
+                throw FixtureCleanupError(primary: error, cleanup: cleanupError)
+            }
+            throw error
         }
 
-        try data.write(to: url, options: .atomic)
+        directory = createdDirectory
+        url = createdURL
     }
 
-    func remove() {
-        try? FileManager.default.removeItem(at: directory)
+    func remove() throws {
+        try FileManager.default.removeItem(at: directory)
     }
 
     private static func ensurePlainDirectory(at url: URL) throws {
-        if FileManager.default.fileExists(atPath: url.path) {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            guard attributes[.type] as? FileAttributeType == .typeDirectory else {
-                throw FixtureBoundaryError()
+        if mkdir(url.path, S_IRWXU) != 0 {
+            let errorNumber = errno
+            guard errorNumber == EEXIST else {
+                throw FixtureFileSystemError(operation: "mkdir", code: errorNumber)
             }
-            return
         }
 
-        try FileManager.default.createDirectory(
-            at: url,
-            withIntermediateDirectories: false
+        _ = try plainDirectoryStatus(at: url)
+    }
+
+    private static func createUniqueDirectory(in parent: URL) throws -> URL {
+        for _ in 0..<10 {
+            let candidate = parent.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            if mkdir(candidate.path, S_IRWXU) == 0 {
+                return candidate
+            }
+
+            let errorNumber = errno
+            guard errorNumber == EEXIST else {
+                throw FixtureFileSystemError(operation: "mkdir", code: errorNumber)
+            }
+        }
+
+        throw FixtureBoundaryError()
+    }
+
+    private static func writePinned(
+        _ data: Data,
+        fileName: String,
+        in directory: URL,
+        repositoryRoot: URL
+    ) throws {
+        let directoryDescriptor = open(
+            directory.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         )
+        guard directoryDescriptor >= 0 else {
+            throw FixtureFileSystemError(operation: "open", code: errno)
+        }
+        defer { close(directoryDescriptor) }
+
+        var openedStatus = stat()
+        guard fstat(directoryDescriptor, &openedStatus) == 0 else {
+            throw FixtureFileSystemError(operation: "fstat", code: errno)
+        }
+
+        let fileDescriptor = openat(
+            directoryDescriptor,
+            fileName,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        )
+        guard fileDescriptor >= 0 else {
+            throw FixtureFileSystemError(operation: "openat", code: errno)
+        }
+
+        let handle = FileHandle(fileDescriptor: fileDescriptor, closeOnDealloc: true)
+        try handle.write(contentsOf: data)
+        try handle.close()
+
+        let currentStatus = try plainDirectoryStatus(at: directory)
+        guard currentStatus.st_dev == openedStatus.st_dev,
+              currentStatus.st_ino == openedStatus.st_ino else {
+            throw FixtureBoundaryError()
+        }
+
+        let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
+        guard isStrictDescendant(resolvedDirectory, of: repositoryRoot) else {
+            throw FixtureBoundaryError()
+        }
+    }
+
+    private static func plainDirectoryStatus(at url: URL) throws -> stat {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else {
+            throw FixtureFileSystemError(operation: "lstat", code: errno)
+        }
+        guard status.st_mode & S_IFMT == S_IFDIR else {
+            throw FixtureBoundaryError()
+        }
+        return status
     }
 
     private static func isStrictDescendant(_ candidate: URL, of root: URL) -> Bool {
@@ -156,6 +251,16 @@ private struct TemporaryProfile {
 }
 
 private struct FixtureBoundaryError: Error {}
+
+private struct FixtureFileSystemError: Error {
+    let operation: String
+    let code: Int32
+}
+
+private struct FixtureCleanupError: Error {
+    let primary: Error
+    let cleanup: Error
+}
 
 private let validProfileJSON = #"""
 {
