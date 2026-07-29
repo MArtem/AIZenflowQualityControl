@@ -54,11 +54,20 @@ public struct QualityReport: Codable, Sendable {
     }
 }
 
-private struct StaticPolicy: Decodable {
+private struct StaticPolicyDocument: Decodable {
     let schemaVersion: Int
     let maximumFileBytes: Int
     let excludedDirectoryNames: [String]
     let forbiddenFileSuffixes: [String]
+}
+
+private struct StaticPolicy {
+    let schemaVersion: Int
+    let maximumFileBytes: Int
+    let excludedDirectoryNames: [String]
+    let forbiddenFileSuffixes: [String]
+    private let excludedDirectoryNameSet: Set<String>
+    private let normalizedForbiddenFileSuffixes: [String]
 
     static func decode(from data: Data) throws -> StaticPolicy {
         try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
@@ -76,14 +85,28 @@ private struct StaticPolicy: Decodable {
             }
         }
 
-        return try JSONDecoder().decode(StaticPolicy.self, from: data)
+        let document = try JSONDecoder().decode(StaticPolicyDocument.self, from: data)
+        return StaticPolicy(
+            schemaVersion: document.schemaVersion,
+            maximumFileBytes: document.maximumFileBytes,
+            excludedDirectoryNames: document.excludedDirectoryNames,
+            forbiddenFileSuffixes: document.forbiddenFileSuffixes,
+            excludedDirectoryNameSet: Set(document.excludedDirectoryNames),
+            normalizedForbiddenFileSuffixes: document.forbiddenFileSuffixes.map {
+                $0.lowercased()
+            }
+        )
     }
 
     func matchesForbiddenSuffix(_ pathComponent: String) -> Bool {
         let lowercasedComponent = pathComponent.lowercased()
-        return forbiddenFileSuffixes.contains {
-            lowercasedComponent.hasSuffix($0.lowercased())
+        return normalizedForbiddenFileSuffixes.contains {
+            lowercasedComponent.hasSuffix($0)
         }
+    }
+
+    func excludesDirectory(_ pathComponent: String) -> Bool {
+        excludedDirectoryNameSet.contains(pathComponent)
     }
 
     func validationChecks() -> [QualityCheck] {
@@ -105,6 +128,17 @@ private struct StaticPolicy: Decodable {
                     id: "QC.POLICY.INVALID_FILE_LIMIT",
                     status: .fail,
                     message: "maximumFileBytes must be greater than zero."
+                )
+            )
+        }
+
+        if excludedDirectoryNames.count > StaticPolicyLimits.maximumListItems
+            || forbiddenFileSuffixes.count > StaticPolicyLimits.maximumListItems {
+            checks.append(
+                QualityCheck(
+                    id: "QC.POLICY.LIST_LIMIT",
+                    status: .fail,
+                    message: "Static policy lists may contain at most \(StaticPolicyLimits.maximumListItems) items each."
                 )
             )
         }
@@ -131,6 +165,27 @@ private struct StaticPolicy: Decodable {
             )
         }
 
+        if Set(excludedDirectoryNames).count != excludedDirectoryNames.count {
+            checks.append(
+                QualityCheck(
+                    id: "QC.POLICY.DUPLICATE_EXCLUDED_DIRECTORY",
+                    status: .fail,
+                    message: "Excluded directory names must be unique."
+                )
+            )
+        }
+
+        if Set(normalizedForbiddenFileSuffixes).count
+            != normalizedForbiddenFileSuffixes.count {
+            checks.append(
+                QualityCheck(
+                    id: "QC.POLICY.DUPLICATE_FILE_SUFFIX",
+                    status: .fail,
+                    message: "Forbidden file suffixes must be unique ignoring case."
+                )
+            )
+        }
+
         if checks.isEmpty {
             checks.append(
                 QualityCheck(
@@ -147,9 +202,30 @@ private struct StaticPolicy: Decodable {
 
 private struct UnknownStaticPolicyPropertyError: Error {}
 
+private enum StaticPolicyLimits {
+    static let maximumListItems = 256
+}
+
 private enum StaticScanLimits {
     static let maximumEntries = 100_000
     static let maximumFindings = 1_000
+}
+
+private struct StaticSourceScope {
+    let configuredPath: String
+    let url: URL
+    let resolvedIdentityComponents: [String]
+}
+
+private enum StaticEntryMetadata {
+    case available(URLResourceValues)
+    case unavailable
+}
+
+private struct StaticScanEntry {
+    let url: URL
+    let relativePath: String
+    let metadata: StaticEntryMetadata
 }
 
 private enum ProfileLoadResult {
@@ -296,15 +372,16 @@ public enum QualityCommands {
             if sandboxRootCheck.status == .pass, sandboxCacheCheck.status == .pass {
                 let cacheRemainsInsideSandbox = ProfileValidator.resolvesWithinRepository(
                     sandboxCacheURL,
-                    root: sandboxRootURL
+                    root: sandboxRootURL,
+                    allowingRoot: false
                 )
                 checks.append(
                     QualityCheck(
                         id: "QC.DOCTOR.SANDBOX_CACHE_BOUNDARY",
                         status: cacheRemainsInsideSandbox ? .pass : .fail,
                         message: cacheRemainsInsideSandbox
-                            ? "Resolved sandbox cache remains inside the sandbox root."
-                            : "Resolved sandbox cache escapes the sandbox root through a symbolic link.",
+                            ? "Resolved sandbox cache remains strictly below the sandbox root."
+                            : "Resolved sandbox cache must remain strictly below the sandbox root.",
                         path: profile.sandbox.cache
                     )
                 )
@@ -390,7 +467,14 @@ public enum QualityCommands {
                 return true
             }
 
-            sourceLoop: for sourcePath in profile.sourcePaths {
+            var sourceScopes: [StaticSourceScope] = []
+            let orderedSourcePaths = profile.sourcePaths.sorted {
+                let lhs = ($0 as NSString).standardizingPath.lowercased()
+                let rhs = ($1 as NSString).standardizingPath.lowercased()
+                return lhs == rhs ? $0 < $1 : lhs < rhs
+            }
+
+            sourceValidationLoop: for sourcePath in orderedSourcePaths {
                 guard let sourceURL = ProfileValidator.resolve(
                     relativePath: sourcePath,
                     under: repositoryRoot
@@ -403,7 +487,7 @@ public enum QualityCommands {
                             path: sourcePath
                         )
                     ) else {
-                        break sourceLoop
+                        break sourceValidationLoop
                     }
                     continue
                 }
@@ -415,7 +499,7 @@ public enum QualityCommands {
                     relativePath: sourcePath
                 )
                 guard appendStaticCheck(sourceCheck) else {
-                    break sourceLoop
+                    break sourceValidationLoop
                 }
 
                 guard sourceCheck.status == .pass else {
@@ -429,7 +513,7 @@ public enum QualityCommands {
                     relativePath: sourcePath
                 )
                 guard appendStaticCheck(boundaryCheck) else {
-                    break sourceLoop
+                    break sourceValidationLoop
                 }
 
                 guard boundaryCheck.status == .pass else {
@@ -445,12 +529,60 @@ public enum QualityCommands {
                             path: sourcePath
                         )
                     ) else {
-                        break sourceLoop
+                        break sourceValidationLoop
                     }
                     continue
                 }
 
-                var enumerationBlockedPath: String?
+                let resolvedIdentityComponents = sourceURL
+                    .resolvingSymlinksInPath()
+                    .standardizedFileURL
+                    .pathComponents
+                    .map { $0.lowercased() }
+
+                if let overlappingScope = sourceScopes.first(where: {
+                    components($0.resolvedIdentityComponents, overlap: resolvedIdentityComponents)
+                }) {
+                    guard appendStaticCheck(
+                        QualityCheck(
+                            id: "QC.STATIC.OVERLAPPING_SOURCE_SCOPE",
+                            status: .fail,
+                            message: "Resolved source scopes must not duplicate or overlap another scope (\(overlappingScope.configuredPath)).",
+                            path: sourcePath
+                        )
+                    ) else {
+                        break sourceValidationLoop
+                    }
+                    continue
+                }
+
+                sourceScopes.append(
+                    StaticSourceScope(
+                        configuredPath: sourcePath,
+                        url: sourceURL,
+                        resolvedIdentityComponents: resolvedIdentityComponents
+                    )
+                )
+            }
+
+            let hasSourceValidationProblem = checks.contains(where: {
+                $0.id.hasPrefix("QC.STATIC.") && $0.status != .pass
+            })
+            guard !hasSourceValidationProblem else {
+                return QualityReport(command: "static", checks: checks)
+            }
+
+            sourceScopes.sort {
+                let lhs = $0.resolvedIdentityComponents.joined(separator: "/")
+                let rhs = $1.resolvedIdentityComponents.joined(separator: "/")
+                return lhs == rhs ? $0.configuredPath < $1.configuredPath : lhs < rhs
+            }
+
+            sourceLoop: for sourceScope in sourceScopes {
+                let sourceURL = sourceScope.url
+                let sourcePath = sourceScope.configuredPath
+
+                var enumerationWasBlocked = false
                 guard let enumerator = FileManager.default.enumerator(
                     at: sourceURL,
                     includingPropertiesForKeys: [
@@ -460,11 +592,8 @@ public enum QualityCommands {
                         .fileSizeKey
                     ],
                     options: [],
-                    errorHandler: { failedURL, _ in
-                        enumerationBlockedPath = relativePath(
-                            for: failedURL,
-                            root: repositoryRoot
-                        )
+                    errorHandler: { _, _ in
+                        enumerationWasBlocked = true
                         return false
                     }
                 ) else {
@@ -481,14 +610,15 @@ public enum QualityCommands {
                     continue
                 }
 
-                entryLoop: for case let fileURL as URL in enumerator {
+                var entries: [StaticScanEntry] = []
+                entryCollectionLoop: for case let fileURL as URL in enumerator {
                     guard scannedEntryCount < StaticScanLimits.maximumEntries else {
                         scanLimitMessage = "Static scan stopped after reaching the entry limit of \(StaticScanLimits.maximumEntries)."
-                        break entryLoop
+                        break entryCollectionLoop
                     }
                     scannedEntryCount += 1
 
-                    let relativePath = relativePath(for: fileURL, root: repositoryRoot)
+                    let entryRelativePath = relativePath(for: fileURL, root: repositoryRoot)
 
                     do {
                         let values = try fileURL.resourceValues(
@@ -500,111 +630,167 @@ public enum QualityCommands {
                             ]
                         )
 
-                        if values.isSymbolicLink == true {
-                            if values.isDirectory == true {
-                                enumerator.skipDescendants()
-                            }
-                            guard appendStaticCheck(
-                                QualityCheck(
-                                    id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW",
-                                    status: .blocked,
-                                    message: "Symbolic links require explicit boundary review.",
-                                    path: relativePath
-                                )
-                            ) else {
-                                break entryLoop
-                            }
-                            continue
-                        }
-
                         if values.isDirectory == true {
-                            if policy.matchesForbiddenSuffix(fileURL.lastPathComponent) {
-                                guard appendStaticCheck(
-                                    QualityCheck(
-                                        id: "QC.STATIC.FORBIDDEN_ARTIFACT",
-                                        status: .fail,
-                                        message: "Generated or release artifact is forbidden in source scope.",
-                                        path: relativePath
-                                    )
-                                ) else {
-                                    break entryLoop
-                                }
+                            let isForbiddenDirectory = policy.matchesForbiddenSuffix(
+                                fileURL.lastPathComponent
+                            )
+                            if isForbiddenDirectory
+                                || policy.excludesDirectory(fileURL.lastPathComponent)
+                                || values.isSymbolicLink == true {
                                 enumerator.skipDescendants()
+                            }
+
+                            if policy.excludesDirectory(fileURL.lastPathComponent),
+                               !isForbiddenDirectory,
+                               values.isSymbolicLink != nil {
                                 continue
                             }
-
-                            if policy.excludedDirectoryNames.contains(fileURL.lastPathComponent) {
-                                enumerator.skipDescendants()
-                            }
-                            continue
                         }
 
-                        guard values.isRegularFile == true else {
-                            continue
-                        }
-
-                        scannedFileCount += 1
-
-                        if let size = values.fileSize, size > policy.maximumFileBytes {
-                            guard appendStaticCheck(
-                                QualityCheck(
-                                    id: "QC.STATIC.OVERSIZED_FILE",
-                                    status: .fail,
-                                    message: "File exceeds the configured maximum byte size.",
-                                    path: relativePath
-                                )
-                            ) else {
-                                break entryLoop
-                            }
-                        } else if values.fileSize == nil {
-                            guard appendStaticCheck(
-                                QualityCheck(
-                                    id: "QC.STATIC.METADATA_BLOCKED",
-                                    status: .blocked,
-                                    message: "Regular file size metadata is unavailable.",
-                                    path: relativePath
-                                )
-                            ) else {
-                                break entryLoop
-                            }
-                        }
-
-                        if policy.matchesForbiddenSuffix(fileURL.lastPathComponent) {
-                            guard appendStaticCheck(
-                                QualityCheck(
-                                    id: "QC.STATIC.FORBIDDEN_ARTIFACT",
-                                    status: .fail,
-                                    message: "Generated or release artifact is forbidden in source scope.",
-                                    path: relativePath
-                                )
-                            ) else {
-                                break entryLoop
-                            }
-                        }
-                    } catch {
-                        guard appendStaticCheck(
-                            QualityCheck(
-                                id: "QC.STATIC.METADATA_BLOCKED",
-                                status: .blocked,
-                                message: "File metadata could not be read.",
-                                path: relativePath
+                        entries.append(
+                            StaticScanEntry(
+                                url: fileURL,
+                                relativePath: entryRelativePath,
+                                metadata: .available(values)
                             )
-                        ) else {
-                            break entryLoop
-                        }
+                        )
+                    } catch {
+                        entries.append(
+                            StaticScanEntry(
+                                url: fileURL,
+                                relativePath: entryRelativePath,
+                                metadata: .unavailable
+                            )
+                        )
                     }
                 }
 
-                if let enumerationBlockedPath {
+                if enumerationWasBlocked {
                     guard appendStaticCheck(
                         QualityCheck(
                             id: "QC.STATIC.ENUMERATION_BLOCKED",
                             status: .blocked,
                             message: "Directory enumeration stopped because an entry could not be read.",
-                            path: enumerationBlockedPath
+                            path: sourcePath
                         )
                     ) else {
                         break sourceLoop
+                    }
+                    continue
+                }
+
+                if scanLimitMessage != nil {
+                    break sourceLoop
+                }
+
+                entries.sort {
+                    $0.relativePath == $1.relativePath
+                        ? $0.url.path < $1.url.path
+                        : $0.relativePath < $1.relativePath
+                }
+
+                entryProcessingLoop: for entry in entries {
+                    if policy.matchesForbiddenSuffix(entry.url.lastPathComponent) {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.FORBIDDEN_ARTIFACT",
+                                status: .fail,
+                                message: "Generated or release artifact is forbidden in source scope.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
+                    }
+
+                    guard case let .available(values) = entry.metadata else {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.METADATA_BLOCKED",
+                                status: .blocked,
+                                message: "Entry metadata could not be read.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
+                        continue
+                    }
+
+                    guard let isSymbolicLink = values.isSymbolicLink else {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.METADATA_BLOCKED",
+                                status: .blocked,
+                                message: "Entry symbolic-link metadata is unavailable.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
+                        continue
+                    }
+
+                    if isSymbolicLink {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW",
+                                status: .blocked,
+                                message: "Symbolic links require explicit boundary review.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
+                        continue
+                    }
+
+                    guard let isDirectory = values.isDirectory,
+                          let isRegularFile = values.isRegularFile else {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.METADATA_BLOCKED",
+                                status: .blocked,
+                                message: "Entry type metadata is unavailable.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
+                        continue
+                    }
+
+                    if isDirectory || !isRegularFile {
+                        continue
+                    }
+
+                    scannedFileCount += 1
+
+                    guard let size = values.fileSize else {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.METADATA_BLOCKED",
+                                status: .blocked,
+                                message: "Regular file size metadata is unavailable.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
+                        continue
+                    }
+
+                    if size > policy.maximumFileBytes {
+                        guard appendStaticCheck(
+                            QualityCheck(
+                                id: "QC.STATIC.OVERSIZED_FILE",
+                                status: .fail,
+                                message: "File exceeds the configured maximum byte size.",
+                                path: entry.relativePath
+                            )
+                        ) else {
+                            break entryProcessingLoop
+                        }
                     }
                 }
 
@@ -753,5 +939,10 @@ public enum QualityCommands {
         }
 
         return String(path.dropFirst(rootPath.count + 1))
+    }
+
+    private static func components(_ lhs: [String], overlap rhs: [String]) -> Bool {
+        let shorterCount = min(lhs.count, rhs.count)
+        return lhs.prefix(shorterCount).elementsEqual(rhs.prefix(shorterCount))
     }
 }

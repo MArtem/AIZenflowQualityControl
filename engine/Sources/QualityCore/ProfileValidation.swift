@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct ValidationIssue: Codable, Equatable, Sendable {
@@ -14,16 +15,50 @@ public struct ValidationIssue: Codable, Equatable, Sendable {
 
 enum JSONDocumentConstraints {
     static let maximumBytes = 1_000_000
+    static let maximumNestingDepth = 64
 
     static func loadData(from url: URL) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-
-        let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
-        guard data.count <= maximumBytes else {
-            throw JSONDocumentLimitError()
+        let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw JSONDocumentReadError()
         }
-        return data
+        defer { close(descriptor) }
+
+        var fileStatus = stat()
+        guard fstat(descriptor, &fileStatus) == 0,
+              fileStatus.st_mode & S_IFMT == S_IFREG else {
+            throw JSONDocumentReadError()
+        }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+
+        while true {
+            let remainingCapacity = maximumBytes + 1 - data.count
+            guard remainingCapacity > 0 else {
+                throw JSONDocumentLimitError()
+            }
+
+            let requestedCount = min(buffer.count, remainingCapacity)
+            let readCount = buffer.withUnsafeMutableBytes { bytes in
+                read(descriptor, bytes.baseAddress, requestedCount)
+            }
+
+            if readCount == 0 {
+                return data
+            }
+            if readCount < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                throw JSONDocumentReadError()
+            }
+
+            data.append(contentsOf: buffer.prefix(Int(readCount)))
+            guard data.count <= maximumBytes else {
+                throw JSONDocumentLimitError()
+            }
+        }
     }
 
     static func rejectDuplicateObjectKeys(in data: Data) throws {
@@ -36,9 +71,11 @@ enum JSONDocumentConstraints {
 }
 
 private struct JSONDocumentLimitError: Error {}
+private struct JSONDocumentReadError: Error {}
 private struct UnsupportedJSONEncodingError: Error {}
 private struct DuplicateJSONKeyError: Error {}
 private struct MalformedJSONStructureError: Error {}
+private struct JSONNestingLimitError: Error {}
 
 private struct JSONDuplicateKeyParser {
     private let bytes: [UInt8]
@@ -55,14 +92,14 @@ private struct JSONDuplicateKeyParser {
 
     mutating func validate() throws {
         skipWhitespace()
-        try parseValue()
+        try parseValue(depth: 0)
         skipWhitespace()
         guard index == bytes.count else {
             throw MalformedJSONStructureError()
         }
     }
 
-    private mutating func parseValue() throws {
+    private mutating func parseValue(depth: Int) throws {
         skipWhitespace()
         guard let byte = currentByte else {
             throw MalformedJSONStructureError()
@@ -70,9 +107,15 @@ private struct JSONDuplicateKeyParser {
 
         switch byte {
         case 0x7B:
-            try parseObject()
+            guard depth < JSONDocumentConstraints.maximumNestingDepth else {
+                throw JSONNestingLimitError()
+            }
+            try parseObject(depth: depth + 1)
         case 0x5B:
-            try parseArray()
+            guard depth < JSONDocumentConstraints.maximumNestingDepth else {
+                throw JSONNestingLimitError()
+            }
+            try parseArray(depth: depth + 1)
         case 0x22:
             _ = try parseString()
         default:
@@ -80,7 +123,7 @@ private struct JSONDuplicateKeyParser {
         }
     }
 
-    private mutating func parseObject() throws {
+    private mutating func parseObject(depth: Int) throws {
         try consume(0x7B)
         skipWhitespace()
         if consumeIfPresent(0x7D) {
@@ -97,7 +140,7 @@ private struct JSONDuplicateKeyParser {
 
             skipWhitespace()
             try consume(0x3A)
-            try parseValue()
+            try parseValue(depth: depth)
             skipWhitespace()
 
             if consumeIfPresent(0x7D) {
@@ -107,7 +150,7 @@ private struct JSONDuplicateKeyParser {
         }
     }
 
-    private mutating func parseArray() throws {
+    private mutating func parseArray(depth: Int) throws {
         try consume(0x5B)
         skipWhitespace()
         if consumeIfPresent(0x5D) {
@@ -115,7 +158,7 @@ private struct JSONDuplicateKeyParser {
         }
 
         while true {
-            try parseValue()
+            try parseValue(depth: depth)
             skipWhitespace()
             if consumeIfPresent(0x5D) {
                 return
@@ -323,20 +366,32 @@ public enum ProfileValidator {
                 )
             )
         } else {
-            var seenSourcePaths = Set<String>()
+            var acceptedSourceScopes: [(path: String, components: [String])] = []
             for (index, sourcePath) in profile.sourcePaths.enumerated() {
-                issues.append(
-                    contentsOf: validateRelativePath(sourcePath, field: "sourcePaths[\(index)]")
+                let pathIssues = validateRelativePath(
+                    sourcePath,
+                    field: "sourcePaths[\(index)]"
                 )
+                issues.append(contentsOf: pathIssues)
 
-                if !seenSourcePaths.insert(sourcePath).inserted {
+                guard pathIssues.isEmpty else {
+                    continue
+                }
+
+                let components = normalizedRelativePathComponents(sourcePath)
+                if let overlappingScope = acceptedSourceScopes.first(where: {
+                    isPrefix($0.components, of: components)
+                        || isPrefix(components, of: $0.components)
+                }) {
                     issues.append(
                         ValidationIssue(
-                            code: "QC.PROFILE.DUPLICATE_SOURCE_PATH",
+                            code: "QC.PROFILE.OVERLAPPING_SOURCE_PATH",
                             path: "sourcePaths[\(index)]",
-                            message: "Source paths must be unique."
+                            message: "Source paths must not duplicate or overlap another scope (\(overlappingScope.path))."
                         )
                     )
+                } else {
+                    acceptedSourceScopes.append((sourcePath, components))
                 }
             }
         }
@@ -389,10 +444,14 @@ public enum ProfileValidator {
         return resolved
     }
 
-    static func resolvesWithinRepository(_ candidate: URL, root: URL) -> Bool {
+    static func resolvesWithinRepository(
+        _ candidate: URL,
+        root: URL,
+        allowingRoot: Bool = true
+    ) -> Bool {
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
         let resolvedCandidate = candidate.resolvingSymlinksInPath().standardizedFileURL.path
-        return isContained(resolvedCandidate, by: resolvedRoot, allowingRoot: true)
+        return isContained(resolvedCandidate, by: resolvedRoot, allowingRoot: allowingRoot)
     }
 
     private static func validateRelativePath(
@@ -449,6 +508,17 @@ public enum ProfileValidator {
                 message: "Profile validation stopped reporting after reaching the issue limit."
             )
         ]
+    }
+
+    private static func normalizedRelativePathComponents(_ value: String) -> [String] {
+        value
+            .split(separator: "/")
+            .filter { $0 != "." }
+            .map { $0.lowercased() }
+    }
+
+    private static func isPrefix(_ prefix: [String], of value: [String]) -> Bool {
+        value.count >= prefix.count && value.prefix(prefix.count).elementsEqual(prefix)
     }
 
     private static func isDescendant(_ candidate: String, of root: String) -> Bool {

@@ -51,9 +51,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          contract_list="${RUNNER_TEMP}/machine-contracts.txt"
+          find schemas policies fixtures -type f -name '*.json' -print0 > "${contract_list}"
+          if [[ ! -s "${contract_list}" ]]; then
+            echo "No machine-readable contracts were found." >&2
+            exit 1
+          fi
           while IFS= read -r -d '' file; do
             python3 -m json.tool "${file}" > /dev/null
-          done < <(find schemas policies fixtures -type f -name '*.json' -print0)
+          done < "${contract_list}"
 
       - name: Run policy-driven repository self-check
         shell: bash
