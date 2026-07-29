@@ -112,6 +112,65 @@ struct StaticPolicyContractTests {
         #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
     }
 
+    @Test("The entry ceiling blocks a scan without creating a high-volume fixture")
+    func entryCeilingBlocksScan() throws {
+        let profile = try makeScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("a".utf8), at: "repository/Sources/A.swift")
+        try profile.write(Data("b".utf8), at: "repository/Sources/B.swift")
+        try profile.write(Data("c".utf8), at: "repository/Sources/C.swift")
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            limits: StaticScanLimits(maximumEntries: 2, maximumFindings: 10)
+        )
+
+        #expect(report.status.rawValue == QualityStatus.blocked.rawValue)
+        let limitCheck = try #require(
+            report.checks.first { $0.id == "QC.STATIC.SCAN_LIMIT_REACHED" }
+        )
+        #expect(limitCheck.status.rawValue == QualityStatus.blocked.rawValue)
+        #expect(
+            limitCheck.message
+                == "Static scan stopped after reaching the entry limit of 2."
+        )
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
+    @Test("The finding ceiling fails closed without creating a high-volume fixture")
+    func findingCeilingFailsClosed() throws {
+        let profile = try makeScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("a".utf8), at: "repository/Sources/A.xcresult")
+        try profile.write(Data("b".utf8), at: "repository/Sources/B.xcresult")
+        try profile.write(Data("c".utf8), at: "repository/Sources/C.xcresult")
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            limits: StaticScanLimits(maximumEntries: 10, maximumFindings: 2)
+        )
+
+        #expect(report.status.rawValue == QualityStatus.fail.rawValue)
+        let findings = report.checks.filter { $0.id == "QC.STATIC.FORBIDDEN_ARTIFACT" }
+        #expect(findings.map(\.path) == [
+            "Sources/A.xcresult",
+            "Sources/B.xcresult"
+        ])
+        let limitCheck = try #require(
+            report.checks.first { $0.id == "QC.STATIC.SCAN_LIMIT_REACHED" }
+        )
+        #expect(limitCheck.status.rawValue == QualityStatus.blocked.rawValue)
+        #expect(
+            limitCheck.message
+                == "Static scan stopped after reaching the finding limit of 2."
+        )
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
     @Test("Overlapping source scopes fail before scanning")
     func overlappingSourceScopesFail() throws {
         let profile = try makeScanProfile(sourcePaths: ["Sources", "ZAlias"])

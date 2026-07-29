@@ -206,9 +206,21 @@ private enum StaticPolicyLimits {
     static let maximumListItems = 256
 }
 
-private enum StaticScanLimits {
-    static let maximumEntries = 100_000
-    static let maximumFindings = 1_000
+struct StaticScanLimits: Sendable {
+    static let production = StaticScanLimits(
+        maximumEntries: 100_000,
+        maximumFindings: 1_000
+    )
+
+    let maximumEntries: Int
+    let maximumFindings: Int
+
+    init(maximumEntries: Int, maximumFindings: Int) {
+        precondition(maximumEntries > 0)
+        precondition(maximumFindings > 0)
+        self.maximumEntries = maximumEntries
+        self.maximumFindings = maximumFindings
+    }
 }
 
 private struct StaticSourceScope {
@@ -396,6 +408,20 @@ public enum QualityCommands {
         policyURL: URL,
         repositoryRoot: URL
     ) -> QualityReport {
+        staticScan(
+            profileURL: profileURL,
+            policyURL: policyURL,
+            repositoryRoot: repositoryRoot,
+            limits: .production
+        )
+    }
+
+    static func staticScan(
+        profileURL: URL,
+        policyURL: URL,
+        repositoryRoot: URL,
+        limits: StaticScanLimits
+    ) -> QualityReport {
         switch loadProfile(at: profileURL) {
         case let .failure(check):
             return QualityReport(command: "static", checks: [check])
@@ -459,8 +485,8 @@ public enum QualityCommands {
                 }
 
                 reportedFindingCount += 1
-                if reportedFindingCount >= StaticScanLimits.maximumFindings {
-                    scanLimitMessage = "Static scan stopped after reaching the finding limit of \(StaticScanLimits.maximumFindings)."
+                if reportedFindingCount >= limits.maximumFindings {
+                    scanLimitMessage = "Static scan stopped after reaching the finding limit of \(limits.maximumFindings)."
                     return false
                 }
 
@@ -612,8 +638,8 @@ public enum QualityCommands {
 
                 var entries: [StaticScanEntry] = []
                 entryCollectionLoop: for case let fileURL as URL in enumerator {
-                    guard scannedEntryCount < StaticScanLimits.maximumEntries else {
-                        scanLimitMessage = "Static scan stopped after reaching the entry limit of \(StaticScanLimits.maximumEntries)."
+                    guard scannedEntryCount < limits.maximumEntries else {
+                        scanLimitMessage = "Static scan stopped after reaching the entry limit of \(limits.maximumEntries)."
                         break entryCollectionLoop
                     }
                     scannedEntryCount += 1
