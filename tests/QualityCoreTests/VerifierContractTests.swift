@@ -75,13 +75,15 @@ enum InvalidProfileInput: String, CaseIterable, Sendable {
     var data: Data {
         switch self {
         case .malformed:
-            Data(#"{"schemaVersion":1"#.utf8)
+            return Data(#"{"schemaVersion":1"#.utf8)
         case .unknownProperty:
-            Data(profileWithUnknownPropertyJSON.utf8)
+            return Data(profileWithUnknownPropertyJSON.utf8)
         case .duplicateProperty:
-            Data(profileWithDuplicatePropertyJSON.utf8)
+            return Data(profileWithDuplicatePropertyJSON.utf8)
         case .oversized:
-            Data(repeating: 0x20, count: 1_000_001)
+            var data = Data(validProfileJSON.utf8)
+            data.append(Data(repeating: 0x20, count: 1_000_001 - data.count))
+            return data
         }
     }
 }
@@ -91,27 +93,69 @@ private struct TemporaryProfile {
     let url: URL
 
     init(data: Data) throws {
-        let cacheRoot = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
+        let repositoryRoot = URL(fileURLWithPath: #filePath, isDirectory: false)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .standardizedFileURL
+        let cacheDirectory = repositoryRoot
         .appendingPathComponent(".quality-control-cache", isDirectory: true)
+        let cacheRoot = cacheDirectory
         .appendingPathComponent("test-fixtures", isDirectory: true)
+
+        try Self.ensurePlainDirectory(at: cacheDirectory)
+        try Self.ensurePlainDirectory(at: cacheRoot)
+
+        let resolvedRepositoryRoot = repositoryRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedCacheRoot = cacheRoot.resolvingSymlinksInPath().standardizedFileURL
+        guard Self.isStrictDescendant(resolvedCacheRoot, of: resolvedRepositoryRoot) else {
+            throw FixtureBoundaryError()
+        }
 
         directory = cacheRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         url = directory.appendingPathComponent("profile.json", isDirectory: false)
 
         try FileManager.default.createDirectory(
             at: directory,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: false
         )
+
+        let resolvedDirectory = directory.resolvingSymlinksInPath().standardizedFileURL
+        guard Self.isStrictDescendant(resolvedDirectory, of: resolvedRepositoryRoot) else {
+            throw FixtureBoundaryError()
+        }
+
         try data.write(to: url, options: .atomic)
     }
 
     func remove() {
         try? FileManager.default.removeItem(at: directory)
     }
+
+    private static func ensurePlainDirectory(at url: URL) throws {
+        if FileManager.default.fileExists(atPath: url.path) {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                throw FixtureBoundaryError()
+            }
+            return
+        }
+
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: false
+        )
+    }
+
+    private static func isStrictDescendant(_ candidate: URL, of root: URL) -> Bool {
+        let rootComponents = root.pathComponents
+        let candidateComponents = candidate.pathComponents
+        return candidateComponents.count > rootComponents.count
+            && candidateComponents.prefix(rootComponents.count).elementsEqual(rootComponents)
+    }
 }
+
+private struct FixtureBoundaryError: Error {}
 
 private let validProfileJSON = #"""
 {
