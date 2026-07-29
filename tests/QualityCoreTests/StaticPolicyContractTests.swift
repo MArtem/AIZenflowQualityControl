@@ -171,6 +171,60 @@ struct StaticPolicyContractTests {
         #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
     }
 
+    @Test("A cooperative deadline blocks a partial scan without waiting")
+    func cooperativeDeadlineBlocksPartialScan() throws {
+        let profile = try makeScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("a".utf8), at: "repository/Sources/A.swift")
+        try profile.write(Data("b".utf8), at: "repository/Sources/B.swift")
+        try profile.write(Data("c".utf8), at: "repository/Sources/C.swift")
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            limits: StaticScanLimits(maximumEntries: 10, maximumFindings: 10),
+            deadlineExceeded: { scannedEntries, _ in scannedEntries >= 2 }
+        )
+
+        #expect(report.status.rawValue == QualityStatus.blocked.rawValue)
+        let timeoutChecks = report.checks.filter { $0.id == "QC.STATIC.TIMEOUT" }
+        let timeoutCheck = try #require(timeoutChecks.first)
+        #expect(timeoutChecks.count == 1)
+        #expect(timeoutCheck.status.rawValue == QualityStatus.blocked.rawValue)
+        #expect(
+            timeoutCheck.message
+                == "Static scan exceeded its cooperative execution deadline."
+        )
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
+    @Test("A finding before the cooperative deadline remains a failure")
+    func findingBeforeCooperativeDeadlineRemainsFailure() throws {
+        let profile = try makeScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("a".utf8), at: "repository/Sources/A.xcresult")
+        try profile.write(Data("b".utf8), at: "repository/Sources/B.xcresult")
+        try profile.write(Data("c".utf8), at: "repository/Sources/C.xcresult")
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            limits: StaticScanLimits(maximumEntries: 10, maximumFindings: 10),
+            deadlineExceeded: { _, reportedFindings in reportedFindings >= 1 }
+        )
+
+        #expect(report.status.rawValue == QualityStatus.fail.rawValue)
+        let findings = report.checks.filter { $0.id == "QC.STATIC.FORBIDDEN_ARTIFACT" }
+        #expect(findings.map(\.path) == ["Sources/A.xcresult"])
+        let timeoutChecks = report.checks.filter { $0.id == "QC.STATIC.TIMEOUT" }
+        let timeoutCheck = try #require(timeoutChecks.first)
+        #expect(timeoutChecks.count == 1)
+        #expect(timeoutCheck.status.rawValue == QualityStatus.blocked.rawValue)
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
     @Test("Overlapping source scopes fail before scanning")
     func overlappingSourceScopesFail() throws {
         let profile = try makeScanProfile(sourcePaths: ["Sources", "ZAlias"])
