@@ -107,13 +107,19 @@ enum InvalidProfileInput: String, CaseIterable, Sendable {
     }
 }
 
-private final class TemporaryProfile {
+final class TemporaryProfile {
+    let directory: URL
     let url: URL
     private let directoryName: String
     private var fixtureRootDescriptor: Int32
     private var directoryDescriptor: Int32
+    private var createdItems: [FixtureItem] = []
 
-    init(data: Data) throws {
+    convenience init(data: Data) throws {
+        try self.init { _ in data }
+    }
+
+    init(dataProvider: (URL) throws -> Data) throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath, isDirectory: false)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -169,6 +175,7 @@ private final class TemporaryProfile {
         let createdURL = created.url.appendingPathComponent("profile.json", isDirectory: false)
 
         do {
+            let data = try dataProvider(created.url)
             try Self.writePinned(
                 data,
                 fileName: createdURL.lastPathComponent,
@@ -194,6 +201,7 @@ private final class TemporaryProfile {
             throw error
         }
 
+        directory = created.url
         url = createdURL
         directoryName = created.name
         fixtureRootDescriptor = openedFixtureRootDescriptor
@@ -206,6 +214,17 @@ private final class TemporaryProfile {
         guard directoryDescriptor >= 0, fixtureRootDescriptor >= 0 else {
             return
         }
+
+        var firstError: Error?
+        for item in createdItems.reversed() {
+            if let error = Self.removeFixtureItem(
+                item,
+                rootDescriptor: directoryDescriptor
+            ), firstError == nil {
+                firstError = error
+            }
+        }
+        createdItems.removeAll()
 
         let cleanupError = Self.removeCreatedFixture(
             fileName: url.lastPathComponent,
@@ -222,12 +241,91 @@ private final class TemporaryProfile {
             : FixtureFileSystemError(operation: "close", code: errno)
         fixtureRootDescriptor = -1
 
+        if let firstError {
+            throw firstError
+        }
         if let cleanupError {
             throw cleanupError
         }
         if let closeError {
             throw closeError
         }
+    }
+
+    func createDirectory(at relativePath: String) throws {
+        let components = try Self.fixturePathComponents(relativePath)
+        var descriptor = try Self.duplicateDescriptor(directoryDescriptor)
+        defer { Darwin.close(descriptor) }
+
+        var createdPathComponents: [String] = []
+        for component in components {
+            let child = try Self.openOrCreateFixtureDirectory(
+                named: component,
+                parentDescriptor: descriptor
+            )
+            Darwin.close(descriptor)
+            descriptor = child.descriptor
+            createdPathComponents.append(component)
+
+            if child.wasCreated {
+                createdItems.append(
+                    FixtureItem(
+                        relativePath: createdPathComponents.joined(separator: "/"),
+                        isDirectory: true
+                    )
+                )
+            }
+        }
+    }
+
+    func write(_ data: Data, at relativePath: String) throws {
+        let components = try Self.fixturePathComponents(relativePath)
+        if components.count > 1 {
+            try createDirectory(at: components.dropLast().joined(separator: "/"))
+        }
+
+        let parent = try Self.openParentDescriptor(
+            for: components,
+            rootDescriptor: directoryDescriptor
+        )
+        defer { Darwin.close(parent.descriptor) }
+
+        do {
+            try Self.writePinned(
+                data,
+                fileName: parent.leafName,
+                directoryDescriptor: parent.descriptor
+            )
+        } catch {
+            let primaryError = error
+            if unlinkat(parent.descriptor, parent.leafName, 0) != 0, errno != ENOENT {
+                throw FixtureCleanupError(
+                    primary: primaryError,
+                    cleanup: FixtureFileSystemError(operation: "unlinkat", code: errno)
+                )
+            }
+            throw primaryError
+        }
+
+        createdItems.append(FixtureItem(relativePath: relativePath, isDirectory: false))
+    }
+
+    func createSymbolicLink(at relativePath: String, destination: String) throws {
+        let components = try Self.fixturePathComponents(relativePath)
+        if components.count > 1 {
+            try createDirectory(at: components.dropLast().joined(separator: "/"))
+        }
+
+        let parent = try Self.openParentDescriptor(
+            for: components,
+            rootDescriptor: directoryDescriptor
+        )
+        defer { Darwin.close(parent.descriptor) }
+
+        guard symlinkat(destination, parent.descriptor, parent.leafName) == 0 else {
+            throw FixtureFileSystemError(operation: "symlinkat", code: errno)
+        }
+        createdItems.append(FixtureItem(relativePath: relativePath, isDirectory: false))
     }
 
     deinit {
@@ -283,6 +381,40 @@ private final class TemporaryProfile {
             Darwin.close(descriptor)
             throw error
         }
+    }
+
+    private static func openOrCreateFixtureDirectory(
+        named name: String,
+        parentDescriptor: Int32
+    ) throws -> (descriptor: Int32, wasCreated: Bool) {
+        let wasCreated: Bool
+        if mkdirat(parentDescriptor, name, S_IRWXU) == 0 {
+            wasCreated = true
+        } else {
+            let errorNumber = errno
+            guard errorNumber == EEXIST else {
+                throw FixtureFileSystemError(operation: "mkdirat", code: errorNumber)
+            }
+            wasCreated = false
+        }
+
+        let descriptor = openat(
+            parentDescriptor,
+            name,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            let primaryError = FixtureFileSystemError(operation: "openat", code: errno)
+            if wasCreated, unlinkat(parentDescriptor, name, AT_REMOVEDIR) != 0 {
+                throw FixtureCleanupError(
+                    primary: primaryError,
+                    cleanup: FixtureFileSystemError(operation: "unlinkat", code: errno)
+                )
+            }
+            throw primaryError
+        }
+
+        return (descriptor, wasCreated)
     }
 
     private static func createUniqueDirectory(
@@ -387,6 +519,76 @@ private final class TemporaryProfile {
         return firstError
     }
 
+    private static func removeFixtureItem(
+        _ item: FixtureItem,
+        rootDescriptor: Int32
+    ) -> Error? {
+        do {
+            let components = try fixturePathComponents(item.relativePath)
+            let parent = try openParentDescriptor(
+                for: components,
+                rootDescriptor: rootDescriptor
+            )
+            defer { Darwin.close(parent.descriptor) }
+
+            let flags = item.isDirectory ? AT_REMOVEDIR : 0
+            guard unlinkat(parent.descriptor, parent.leafName, flags) == 0 else {
+                return FixtureFileSystemError(operation: "unlinkat", code: errno)
+            }
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    private static func openParentDescriptor(
+        for components: [String],
+        rootDescriptor: Int32
+    ) throws -> (descriptor: Int32, leafName: String) {
+        guard let leafName = components.last else {
+            throw FixtureBoundaryError()
+        }
+
+        var descriptor = try duplicateDescriptor(rootDescriptor)
+        for component in components.dropLast() {
+            let childDescriptor = openat(
+                descriptor,
+                component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+            guard childDescriptor >= 0 else {
+                let error = FixtureFileSystemError(operation: "openat", code: errno)
+                Darwin.close(descriptor)
+                throw error
+            }
+            Darwin.close(descriptor)
+            descriptor = childDescriptor
+        }
+
+        return (descriptor, leafName)
+    }
+
+    private static func duplicateDescriptor(_ descriptor: Int32) throws -> Int32 {
+        let duplicate = Darwin.dup(descriptor)
+        guard duplicate >= 0 else {
+            throw FixtureFileSystemError(operation: "dup", code: errno)
+        }
+        return duplicate
+    }
+
+    private static func fixturePathComponents(_ relativePath: String) throws -> [String] {
+        guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else {
+            throw FixtureBoundaryError()
+        }
+
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw FixtureBoundaryError()
+        }
+        return components.map(String.init)
+    }
+
     private static func validatePinnedDirectory(
         _ descriptor: Int32,
         at url: URL,
@@ -423,6 +625,11 @@ private final class TemporaryProfile {
         return candidateComponents.count > rootComponents.count
             && candidateComponents.prefix(rootComponents.count).elementsEqual(rootComponents)
     }
+}
+
+private struct FixtureItem {
+    let relativePath: String
+    let isDirectory: Bool
 }
 
 private struct FixtureBoundaryError: Error {}
