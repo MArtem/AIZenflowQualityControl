@@ -20,6 +20,11 @@ let package = Package(
             name: "QualityCLI",
             dependencies: ["QualityCore"],
             path: "engine/Sources/QualityCLI"
+        ),
+        .testTarget(
+            name: "QualityCoreTests",
+            dependencies: ["QualityCore"],
+            path: "tests/QualityCoreTests"
         )
     ]
 )
