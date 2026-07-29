@@ -223,6 +223,10 @@ struct StaticScanLimits: Sendable {
     }
 }
 
+private enum StaticScanTimeouts {
+    static let production: Duration = .seconds(240)
+}
+
 private struct StaticSourceScope {
     let configuredPath: String
     let url: URL
@@ -408,11 +412,15 @@ public enum QualityCommands {
         policyURL: URL,
         repositoryRoot: URL
     ) -> QualityReport {
-        staticScan(
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
+
+        return staticScan(
             profileURL: profileURL,
             policyURL: policyURL,
             repositoryRoot: repositoryRoot,
-            limits: .production
+            limits: .production,
+            deadlineExceeded: { _, _ in clock.now >= deadline }
         )
     }
 
@@ -420,7 +428,8 @@ public enum QualityCommands {
         profileURL: URL,
         policyURL: URL,
         repositoryRoot: URL,
-        limits: StaticScanLimits
+        limits: StaticScanLimits,
+        deadlineExceeded: (_ scannedEntries: Int, _ reportedFindings: Int) -> Bool = { _, _ in false }
     ) -> QualityReport {
         switch loadProfile(at: profileURL) {
         case let .failure(check):
@@ -476,6 +485,28 @@ public enum QualityCommands {
             var scannedEntryCount = 0
             var reportedFindingCount = 0
             var scanLimitMessage: String?
+            var timeoutWasReached = false
+
+            func stopForTimeout(path: String? = nil) -> Bool {
+                if timeoutWasReached {
+                    return true
+                }
+
+                guard deadlineExceeded(scannedEntryCount, reportedFindingCount) else {
+                    return false
+                }
+
+                timeoutWasReached = true
+                checks.append(
+                    QualityCheck(
+                        id: "QC.STATIC.TIMEOUT",
+                        status: .blocked,
+                        message: "Static scan exceeded its cooperative execution deadline.",
+                        path: path
+                    )
+                )
+                return true
+            }
 
             func appendStaticCheck(_ check: QualityCheck) -> Bool {
                 checks.append(check)
@@ -501,6 +532,10 @@ public enum QualityCommands {
             }
 
             sourceValidationLoop: for sourcePath in orderedSourcePaths {
+                if stopForTimeout(path: sourcePath) {
+                    break sourceValidationLoop
+                }
+
                 guard let sourceURL = ProfileValidator.resolve(
                     relativePath: sourcePath,
                     under: repositoryRoot
@@ -608,6 +643,10 @@ public enum QualityCommands {
                 let sourceURL = sourceScope.url
                 let sourcePath = sourceScope.configuredPath
 
+                if stopForTimeout(path: sourcePath) {
+                    break sourceLoop
+                }
+
                 var enumerationWasBlocked = false
                 guard let enumerator = FileManager.default.enumerator(
                     at: sourceURL,
@@ -638,6 +677,10 @@ public enum QualityCommands {
 
                 var entries: [StaticScanEntry] = []
                 entryCollectionLoop: for case let fileURL as URL in enumerator {
+                    if stopForTimeout(path: sourcePath) {
+                        break entryCollectionLoop
+                    }
+
                     guard scannedEntryCount < limits.maximumEntries else {
                         scanLimitMessage = "Static scan stopped after reaching the entry limit of \(limits.maximumEntries)."
                         break entryCollectionLoop
@@ -709,6 +752,10 @@ public enum QualityCommands {
                     break sourceLoop
                 }
 
+                if timeoutWasReached {
+                    break sourceLoop
+                }
+
                 entries.sort {
                     $0.relativePath == $1.relativePath
                         ? $0.url.path < $1.url.path
@@ -716,6 +763,10 @@ public enum QualityCommands {
                 }
 
                 entryProcessingLoop: for entry in entries {
+                    if stopForTimeout(path: entry.relativePath) {
+                        break entryProcessingLoop
+                    }
+
                     if policy.matchesForbiddenSuffix(entry.url.lastPathComponent) {
                         guard appendStaticCheck(
                             QualityCheck(
@@ -823,7 +874,13 @@ public enum QualityCommands {
                 if scanLimitMessage != nil {
                     break sourceLoop
                 }
+
+                if timeoutWasReached {
+                    break sourceLoop
+                }
             }
+
+            _ = stopForTimeout()
 
             if let scanLimitMessage {
                 checks.append(
