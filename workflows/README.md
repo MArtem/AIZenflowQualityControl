@@ -24,14 +24,14 @@ another branch or ref.
 The five-minute `macos-15` job uses read-only repository permissions and performs:
 
 - Swift package-manifest validation;
-- warnings-as-errors `QualityCore` typecheck and `QualityCLI` parse;
 - JSON parsing for schemas, policies, and fixtures;
-- maximum-file-size and forbidden-artifact checks;
+- a warnings-as-errors build of the dependency-free `quality` executable followed by a
+  policy-driven self-scan using `policies/static-policy.json`;
 - branch-diff whitespace validation against the repository default branch.
 
 This is repository self-verification, not an adopted application profile. It does not run the
-`quality` executable against an Xcode project and does not provide build, test, runtime,
-accessibility, performance, security, or production-readiness evidence.
+`quality` executable against an application or build an Xcode project. It does not provide test,
+application-runtime, accessibility, performance, security, or production-readiness evidence.
 
 Future workflows must use pinned dependencies, least privilege, bounded artifacts, exact-source
 evidence, standard included runners, zero additional monetary cost, and no paid AI API calls. They

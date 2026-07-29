@@ -12,9 +12,188 @@ public struct ValidationIssue: Codable, Equatable, Sendable {
     }
 }
 
+enum JSONDocumentConstraints {
+    static let maximumBytes = 1_000_000
+
+    static func loadData(from url: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+        guard data.count <= maximumBytes else {
+            throw JSONDocumentLimitError()
+        }
+        return data
+    }
+
+    static func rejectDuplicateObjectKeys(in data: Data) throws {
+        guard String(data: data, encoding: .utf8) != nil else {
+            throw UnsupportedJSONEncodingError()
+        }
+        var parser = JSONDuplicateKeyParser(data: data)
+        try parser.validate()
+    }
+}
+
+private struct JSONDocumentLimitError: Error {}
+private struct UnsupportedJSONEncodingError: Error {}
+private struct DuplicateJSONKeyError: Error {}
+private struct MalformedJSONStructureError: Error {}
+
+private struct JSONDuplicateKeyParser {
+    private let bytes: [UInt8]
+    private var index = 0
+
+    init(data: Data) {
+        let bytes = Array(data)
+        if bytes.starts(with: [0xEF, 0xBB, 0xBF]) {
+            self.bytes = Array(bytes.dropFirst(3))
+        } else {
+            self.bytes = bytes
+        }
+    }
+
+    mutating func validate() throws {
+        skipWhitespace()
+        try parseValue()
+        skipWhitespace()
+        guard index == bytes.count else {
+            throw MalformedJSONStructureError()
+        }
+    }
+
+    private mutating func parseValue() throws {
+        skipWhitespace()
+        guard let byte = currentByte else {
+            throw MalformedJSONStructureError()
+        }
+
+        switch byte {
+        case 0x7B:
+            try parseObject()
+        case 0x5B:
+            try parseArray()
+        case 0x22:
+            _ = try parseString()
+        default:
+            try parseScalar()
+        }
+    }
+
+    private mutating func parseObject() throws {
+        try consume(0x7B)
+        skipWhitespace()
+        if consumeIfPresent(0x7D) {
+            return
+        }
+
+        var keys = Set<String>()
+        while true {
+            skipWhitespace()
+            let key = try parseString()
+            guard keys.insert(key).inserted else {
+                throw DuplicateJSONKeyError()
+            }
+
+            skipWhitespace()
+            try consume(0x3A)
+            try parseValue()
+            skipWhitespace()
+
+            if consumeIfPresent(0x7D) {
+                return
+            }
+            try consume(0x2C)
+        }
+    }
+
+    private mutating func parseArray() throws {
+        try consume(0x5B)
+        skipWhitespace()
+        if consumeIfPresent(0x5D) {
+            return
+        }
+
+        while true {
+            try parseValue()
+            skipWhitespace()
+            if consumeIfPresent(0x5D) {
+                return
+            }
+            try consume(0x2C)
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        let start = index
+        try consume(0x22)
+        var isEscaped = false
+
+        while let byte = currentByte {
+            index += 1
+
+            if isEscaped {
+                isEscaped = false
+                continue
+            }
+            if byte == 0x5C {
+                isEscaped = true
+                continue
+            }
+            if byte == 0x22 {
+                let encodedString = Data(bytes[start..<index])
+                return try JSONDecoder().decode(String.self, from: encodedString)
+            }
+        }
+
+        throw MalformedJSONStructureError()
+    }
+
+    private mutating func parseScalar() throws {
+        let start = index
+        while let byte = currentByte,
+              !isWhitespace(byte),
+              ![0x2C, 0x5D, 0x7D].contains(byte) {
+            index += 1
+        }
+        guard index > start else {
+            throw MalformedJSONStructureError()
+        }
+    }
+
+    private mutating func consume(_ expected: UInt8) throws {
+        guard consumeIfPresent(expected) else {
+            throw MalformedJSONStructureError()
+        }
+    }
+
+    private mutating func consumeIfPresent(_ expected: UInt8) -> Bool {
+        guard currentByte == expected else {
+            return false
+        }
+        index += 1
+        return true
+    }
+
+    private mutating func skipWhitespace() {
+        while let byte = currentByte, isWhitespace(byte) {
+            index += 1
+        }
+    }
+
+    private func isWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
+    }
+
+    private var currentByte: UInt8? {
+        index < bytes.count ? bytes[index] : nil
+    }
+}
+
 public enum ProfileLoader {
     public static func load(from url: URL) throws -> ProjectProfile {
-        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        let data = try JSONDocumentConstraints.loadData(from: url)
+        try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
         try validateClosedObjectProperties(in: data)
         return try JSONDecoder().decode(ProjectProfile.self, from: data)
     }
@@ -73,6 +252,11 @@ public enum ProfileLoader {
 
 private struct UnknownProfilePropertyError: Error {}
 
+private enum ProfileValidationLimits {
+    static let maximumSourcePaths = 256
+    static let maximumIssues = 256
+}
+
 public enum ProfileValidator {
     public static func validate(_ profile: ProjectProfile) -> [ValidationIssue] {
         var issues: [ValidationIssue] = []
@@ -130,20 +314,30 @@ public enum ProfileValidator {
             )
         }
 
-        var seenSourcePaths = Set<String>()
-        for (index, sourcePath) in profile.sourcePaths.enumerated() {
+        if profile.sourcePaths.count > ProfileValidationLimits.maximumSourcePaths {
             issues.append(
-                contentsOf: validateRelativePath(sourcePath, field: "sourcePaths[\(index)]")
-            )
-
-            if !seenSourcePaths.insert(sourcePath).inserted {
-                issues.append(
-                    ValidationIssue(
-                        code: "QC.PROFILE.DUPLICATE_SOURCE_PATH",
-                        path: "sourcePaths[\(index)]",
-                        message: "Source paths must be unique."
-                    )
+                ValidationIssue(
+                    code: "QC.PROFILE.SOURCE_PATH_LIMIT",
+                    path: "sourcePaths",
+                    message: "A profile may contain at most \(ProfileValidationLimits.maximumSourcePaths) source paths."
                 )
+            )
+        } else {
+            var seenSourcePaths = Set<String>()
+            for (index, sourcePath) in profile.sourcePaths.enumerated() {
+                issues.append(
+                    contentsOf: validateRelativePath(sourcePath, field: "sourcePaths[\(index)]")
+                )
+
+                if !seenSourcePaths.insert(sourcePath).inserted {
+                    issues.append(
+                        ValidationIssue(
+                            code: "QC.PROFILE.DUPLICATE_SOURCE_PATH",
+                            path: "sourcePaths[\(index)]",
+                            message: "Source paths must be unique."
+                        )
+                    )
+                }
             }
         }
 
@@ -176,7 +370,7 @@ public enum ProfileValidator {
             )
         }
 
-        return issues
+        return boundedIssues(issues)
     }
 
     static func resolve(relativePath: String, under root: URL) -> URL? {
@@ -241,6 +435,20 @@ public enum ProfileValidator {
 
     private static func isAbsolute(_ value: String) -> Bool {
         (value as NSString).isAbsolutePath
+    }
+
+    private static func boundedIssues(_ issues: [ValidationIssue]) -> [ValidationIssue] {
+        guard issues.count > ProfileValidationLimits.maximumIssues else {
+            return issues
+        }
+
+        return Array(issues.prefix(ProfileValidationLimits.maximumIssues - 1)) + [
+            ValidationIssue(
+                code: "QC.PROFILE.ISSUE_LIMIT_REACHED",
+                path: "$",
+                message: "Profile validation stopped reporting after reaching the issue limit."
+            )
+        ]
     }
 
     private static func isDescendant(_ candidate: String, of root: String) -> Bool {

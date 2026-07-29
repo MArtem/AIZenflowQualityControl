@@ -61,6 +61,8 @@ private struct StaticPolicy: Decodable {
     let forbiddenFileSuffixes: [String]
 
     static func decode(from data: Data) throws -> StaticPolicy {
+        try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
+
         if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let allowedProperties: Set<String> = [
                 "schemaVersion",
@@ -328,7 +330,7 @@ public enum QualityCommands {
 
             let policy: StaticPolicy
             do {
-                let data = try Data(contentsOf: policyURL, options: [.mappedIfSafe])
+                let data = try JSONDocumentConstraints.loadData(from: policyURL)
                 policy = try StaticPolicy.decode(from: data)
             } catch {
                 return QualityReport(
@@ -549,6 +551,17 @@ public enum QualityCommands {
                                     id: "QC.STATIC.OVERSIZED_FILE",
                                     status: .fail,
                                     message: "File exceeds the configured maximum byte size.",
+                                    path: relativePath
+                                )
+                            ) else {
+                                break entryLoop
+                            }
+                        } else if values.fileSize == nil {
+                            guard appendStaticCheck(
+                                QualityCheck(
+                                    id: "QC.STATIC.METADATA_BLOCKED",
+                                    status: .blocked,
+                                    message: "Regular file size metadata is unavailable.",
                                     path: relativePath
                                 )
                             ) else {

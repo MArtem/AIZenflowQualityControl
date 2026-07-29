@@ -47,29 +47,6 @@ jobs:
           swift package dump-package > "${RUNNER_TEMP}/package.json"
           python3 -m json.tool "${RUNNER_TEMP}/package.json" > /dev/null
 
-      - name: Typecheck QualityCore
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/module-cache"
-          xcrun swiftc \
-            -parse-as-library \
-            -warnings-as-errors \
-            -module-cache-path "${RUNNER_TEMP}/module-cache" \
-            -typecheck \
-            engine/Sources/QualityCore/ProjectProfile.swift \
-            engine/Sources/QualityCore/ProfileValidation.swift \
-            engine/Sources/QualityCore/QualityCommands.swift
-
-      - name: Parse QualityCLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          xcrun swiftc \
-            -warnings-as-errors \
-            -parse \
-            engine/Sources/QualityCLI/main.swift
-
       - name: Validate machine-readable contracts
         shell: bash
         run: |
@@ -78,36 +55,61 @@ jobs:
             python3 -m json.tool "${file}" > /dev/null
           done < <(find schemas policies fixtures -type f -name '*.json' -print0)
 
-      - name: Reject oversized and forbidden artifacts
+      - name: Run policy-driven repository self-check
         shell: bash
+        env:
+          QC_PROFILE_PATH: ${{ runner.temp }}/quality-control-self-profile.json
+          QC_REPORT_PATH: ${{ runner.temp }}/quality-control-self-report.json
+          QC_SANDBOX_ROOT: ${{ runner.temp }}/quality-control-sandbox
         run: |
           set -euo pipefail
-          find . \
-            -name '.git' -prune -o \
-            -name '.build' -prune -o \
-            -name 'DerivedData' -prune -o \
-            -type f -size +5000000c -print \
-            > "${RUNNER_TEMP}/oversized-artifacts.txt"
+          mkdir -p "${QC_SANDBOX_ROOT}/cache"
+          python3 - <<'PY'
+          import json
+          import os
 
-          find . \
-            -name '.git' -prune -o \
-            -name '.build' -prune -o \
-            -name 'DerivedData' -prune -o \
-            \( -name '*.xcresult' -o -name '*.xcarchive' -o -name '*.ipa' \) \
-            -print \
-            > "${RUNNER_TEMP}/forbidden-artifacts.txt"
+          profile = {
+              "schemaVersion": 1,
+              "project": {"kind": "xcodeproj", "path": "QualityControl.xcodeproj"},
+              "scheme": "QualityControl",
+              "sourcePaths": ["."],
+              "mode": "controlled",
+              "permissions": {
+                  "testCreation": "deny",
+                  "testModification": "deny",
+                  "localTestExecution": "deny",
+                  "githubExecution": "manual",
+                  "uiTests": "deny",
+                  "simulatorOrDevice": "deny",
+                  "performanceOrInstruments": "deny",
+              },
+              "sandbox": {
+                  "root": os.environ["QC_SANDBOX_ROOT"],
+                  "cache": os.path.join(os.environ["QC_SANDBOX_ROOT"], "cache"),
+              },
+          }
+          with open(os.environ["QC_PROFILE_PATH"], "w", encoding="utf-8") as output:
+              json.dump(profile, output, sort_keys=True)
+          PY
 
-          if [[ -s "${RUNNER_TEMP}/oversized-artifacts.txt" ]]; then
-            echo "Files exceeding 5,000,000 bytes:" >&2
-            sed -n '1,50p' "${RUNNER_TEMP}/oversized-artifacts.txt" >&2
-            exit 1
-          fi
+          swift run \
+            --scratch-path "${RUNNER_TEMP}/swift-scratch" \
+            -Xswiftc -warnings-as-errors \
+            quality static \
+            --profile "${QC_PROFILE_PATH}" \
+            --policy policies/static-policy.json \
+            --repository-root "${GITHUB_WORKSPACE}" \
+            > "${QC_REPORT_PATH}"
 
-          if [[ -s "${RUNNER_TEMP}/forbidden-artifacts.txt" ]]; then
-            echo "Forbidden generated or release artifacts:" >&2
-            sed -n '1,50p' "${RUNNER_TEMP}/forbidden-artifacts.txt" >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open(os.environ["QC_REPORT_PATH"], encoding="utf-8") as source:
+              report = json.load(source)
+          if report.get("status") != "PASS":
+              raise SystemExit("Policy-driven repository self-check did not report PASS")
+          PY
 
       - name: Check branch diff whitespace
         shell: bash
@@ -116,8 +118,16 @@ jobs:
         run: |
           set -euo pipefail
           default_branch="origin/${DEFAULT_BRANCH}"
-          merge_base="$(git merge-base HEAD "${default_branch}")"
-          git diff --check "${merge_base}"..HEAD
+          if [[ "$(git rev-parse HEAD)" == "$(git rev-parse "${default_branch}")" ]]; then
+            if git rev-parse HEAD^ >/dev/null 2>&1; then
+              comparison_base="HEAD^"
+            else
+              comparison_base="$(git hash-object -t tree /dev/null)"
+            fi
+          else
+            comparison_base="$(git merge-base HEAD "${default_branch}")"
+          fi
+          git diff --check "${comparison_base}" HEAD
 
       - name: Record successful result
         shell: bash

@@ -72,12 +72,10 @@
       "additionalProperties": false,
       "properties": {
         "cache": {
-          "minLength": 1,
-          "type": "string"
+          "$ref": "#/$defs/absolutePath"
         },
         "root": {
-          "minLength": 1,
-          "type": "string"
+          "$ref": "#/$defs/absolutePath"
         }
       },
       "required": [
@@ -98,6 +96,7 @@
       "items": {
         "$ref": "#/$defs/relativePath"
       },
+      "maxItems": 256,
       "minItems": 1,
       "type": "array",
       "uniqueItems": true
@@ -115,6 +114,11 @@
   "title": "AIZenflow Quality Control Project Profile",
   "type": "object",
   "$defs": {
+    "absolutePath": {
+      "minLength": 1,
+      "pattern": "^/",
+      "type": "string"
+    },
     "permissionDecision": {
       "enum": [
         "allow",
