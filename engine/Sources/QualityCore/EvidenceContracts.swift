@@ -215,6 +215,26 @@ public struct QualityEvidence: Codable, Sendable {
     }
 }
 
+public struct EvidenceCommandExpectation: Equatable, Sendable {
+    public let commandLine: [String]
+    public let action: PermissionAction?
+
+    public init(commandLine: [String], action: PermissionAction? = nil) {
+        self.commandLine = commandLine
+        self.action = action
+    }
+}
+
+public struct EvidenceGateExpectation: Equatable, Sendable {
+    public let commandID: String?
+    public let action: PermissionAction?
+
+    public init(commandID: String? = nil, action: PermissionAction? = nil) {
+        self.commandID = commandID
+        self.action = action
+    }
+}
+
 public struct EvidenceExpectation: Sendable {
     public let sourceRepository: String
     public let sourceRevision: String
@@ -224,10 +244,11 @@ public struct EvidenceExpectation: Sendable {
     public let profileSHA256: String
     public let toolchain: EvidenceToolchain
     public let permissions: PermissionPolicy
-    public let commandLinesByID: [String: [String]]
-    public let gateIDs: Set<String>
+    public let commandsByID: [String: EvidenceCommandExpectation]
+    public let gatesByID: [String: EvidenceGateExpectation]
     public let userAuthorizedActions: Set<PermissionAction>
     public let testCounts: EvidenceTestCounts?
+    public let testGateID: String?
     public let reviewRevision: String?
     public let artifactSHA256ByPath: [String: String]
     public let residualRisks: Set<String>
@@ -241,10 +262,11 @@ public struct EvidenceExpectation: Sendable {
         profileSHA256: String,
         toolchain: EvidenceToolchain,
         permissions: PermissionPolicy,
-        commandLinesByID: [String: [String]],
-        gateIDs: Set<String>,
+        commandsByID: [String: EvidenceCommandExpectation],
+        gatesByID: [String: EvidenceGateExpectation],
         userAuthorizedActions: Set<PermissionAction> = [],
         testCounts: EvidenceTestCounts? = nil,
+        testGateID: String? = nil,
         reviewRevision: String? = nil,
         artifactSHA256ByPath: [String: String] = [:],
         residualRisks: Set<String> = []
@@ -257,10 +279,11 @@ public struct EvidenceExpectation: Sendable {
         self.profileSHA256 = profileSHA256
         self.toolchain = toolchain
         self.permissions = permissions
-        self.commandLinesByID = commandLinesByID
-        self.gateIDs = gateIDs
+        self.commandsByID = commandsByID
+        self.gatesByID = gatesByID
         self.userAuthorizedActions = userAuthorizedActions
         self.testCounts = testCounts
+        self.testGateID = testGateID
         self.reviewRevision = reviewRevision
         self.artifactSHA256ByPath = artifactSHA256ByPath
         self.residualRisks = residualRisks
@@ -346,17 +369,22 @@ public enum EvidenceVerifier {
         validateCommands(
             evidence.commands,
             policy: evidence.permissions,
-            expectedCommandLinesByID: expected.commandLinesByID,
+            expectedByID: expected.commandsByID,
             userAuthorizedActions: expected.userAuthorizedActions,
             issues: &issues
         )
         validateGates(
             evidence.gates,
             commands: evidence.commands,
-            expectedGateIDs: expected.gateIDs,
+            expectedByID: expected.gatesByID,
             issues: &issues
         )
-        validateTestCounts(evidence.testCounts, issues: &issues)
+        validateTestCounts(
+            evidence.testCounts,
+            gates: evidence.gates,
+            expectedTestGateID: expected.testGateID,
+            issues: &issues
+        )
         require(
             evidence.testCounts == expected.testCounts,
             "QC.EVIDENCE.TEST_COUNTS_MISMATCH",
@@ -415,7 +443,7 @@ public enum EvidenceVerifier {
     private static func validateCommands(
         _ commands: [EvidenceCommand],
         policy: PermissionPolicy,
-        expectedCommandLinesByID: [String: [String]],
+        expectedByID: [String: EvidenceCommandExpectation],
         userAuthorizedActions: Set<PermissionAction>,
         issues: inout [EvidenceVerificationIssue]
     ) {
@@ -426,9 +454,13 @@ public enum EvidenceVerifier {
             &issues
         )
         require(
-            commands.count == expectedCommandLinesByID.count
-                && expectedCommandLinesByID.allSatisfy { id, commandLine in
-                    commands.contains { $0.id == id && $0.commandLine == commandLine }
+            commands.count == expectedByID.count
+                && expectedByID.allSatisfy { id, expectation in
+                    commands.contains {
+                        $0.id == id
+                            && $0.commandLine == expectation.commandLine
+                            && $0.action == expectation.action
+                    }
                 },
             "QC.EVIDENCE.COMMAND_SET_MISMATCH",
             &issues
@@ -474,7 +506,7 @@ public enum EvidenceVerifier {
     private static func validateGates(
         _ gates: [EvidenceGate],
         commands: [EvidenceCommand],
-        expectedGateIDs: Set<String>,
+        expectedByID: [String: EvidenceGateExpectation],
         issues: inout [EvidenceVerificationIssue]
     ) {
         require(!gates.isEmpty, "QC.EVIDENCE.NO_GATES", &issues)
@@ -484,7 +516,14 @@ public enum EvidenceVerifier {
             &issues
         )
         require(
-            Set(gates.map(\.id)) == expectedGateIDs,
+            gates.count == expectedByID.count
+                && expectedByID.allSatisfy { id, expectation in
+                    gates.contains {
+                        $0.id == id
+                            && $0.commandID == expectation.commandID
+                            && $0.action == expectation.action
+                    }
+                },
             "QC.EVIDENCE.GATE_SET_MISMATCH",
             &issues
         )
@@ -552,16 +591,45 @@ public enum EvidenceVerifier {
 
     private static func validateTestCounts(
         _ counts: EvidenceTestCounts?,
+        gates: [EvidenceGate],
+        expectedTestGateID: String?,
         issues: inout [EvidenceVerificationIssue]
     ) {
         guard let counts else {
+            require(
+                expectedTestGateID == nil,
+                "QC.EVIDENCE.TEST_GATE_WITHOUT_COUNTS",
+                &issues
+            )
             return
         }
+        let maximumCount = 1_000_000
+        let components = [counts.total, counts.passed, counts.failed, counts.skipped]
+        let componentsAreBounded = components.allSatisfy { (0...maximumCount).contains($0) }
         require(
-            counts.total >= 0 && counts.passed >= 0 && counts.failed >= 0 && counts.skipped >= 0
-                && counts.total <= 1_000_000
+            componentsAreBounded
                 && counts.total == counts.passed + counts.failed + counts.skipped,
             "QC.EVIDENCE.INVALID_TEST_COUNTS",
+            &issues
+        )
+
+        guard let expectedTestGateID,
+              let testGate = gates.first(where: { $0.id == expectedTestGateID }) else {
+            require(false, "QC.EVIDENCE.MISSING_TEST_GATE", &issues)
+            return
+        }
+
+        let expectedStatus: GateStatus
+        if counts.total == 0 {
+            expectedStatus = .blocked
+        } else if counts.failed > 0 {
+            expectedStatus = .fail
+        } else {
+            expectedStatus = .pass
+        }
+        require(
+            testGate.status == expectedStatus,
+            "QC.EVIDENCE.TEST_COUNT_GATE_MISMATCH",
             &issues
         )
     }

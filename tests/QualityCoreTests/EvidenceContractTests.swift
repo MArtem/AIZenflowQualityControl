@@ -153,8 +153,18 @@ struct EvidenceContractTests {
         let result = EvidenceVerifier.verify(
             evidence,
             expected: expectation(
-                commands: ["tests": ["swift", "test"]],
-                gateIDs: ["QC.TESTS"],
+                commands: [
+                    "tests": EvidenceCommandExpectation(
+                        commandLine: ["swift", "test"],
+                        action: .testModification
+                    )
+                ],
+                gates: [
+                    "QC.TESTS": EvidenceGateExpectation(
+                        commandID: "tests",
+                        action: .testModification
+                    )
+                ],
                 artifacts: [:]
             )
         )
@@ -190,8 +200,18 @@ struct EvidenceContractTests {
         let result = EvidenceVerifier.verify(
             evidence,
             expected: expectation(
-                commands: ["tests": ["swift", "test"]],
-                gateIDs: ["QC.TESTS"],
+                commands: [
+                    "tests": EvidenceCommandExpectation(
+                        commandLine: ["swift", "test"],
+                        action: .localTestExecution
+                    )
+                ],
+                gates: [
+                    "QC.TESTS": EvidenceGateExpectation(
+                        commandID: "tests",
+                        action: .localTestExecution
+                    )
+                ],
                 artifacts: [:]
             )
         )
@@ -227,8 +247,18 @@ struct EvidenceContractTests {
         let result = EvidenceVerifier.verify(
             evidence,
             expected: expectation(
-                commands: ["tests": ["swift", "test"]],
-                gateIDs: ["QC.TESTS"],
+                commands: [
+                    "tests": EvidenceCommandExpectation(
+                        commandLine: ["swift", "test"],
+                        action: .localTestExecution
+                    )
+                ],
+                gates: [
+                    "QC.TESTS": EvidenceGateExpectation(
+                        commandID: "tests",
+                        action: .localTestExecution
+                    )
+                ],
                 userAuthorizedActions: [.localTestExecution],
                 artifacts: [:]
             )
@@ -265,8 +295,18 @@ struct EvidenceContractTests {
         let result = EvidenceVerifier.verify(
             evidence,
             expected: expectation(
-                commands: ["tests": ["swift", "test"]],
-                gateIDs: ["QC.TESTS"],
+                commands: [
+                    "tests": EvidenceCommandExpectation(
+                        commandLine: ["swift", "test"],
+                        action: .localTestExecution
+                    )
+                ],
+                gates: [
+                    "QC.TESTS": EvidenceGateExpectation(
+                        commandID: "tests",
+                        action: .localTestExecution
+                    )
+                ],
                 artifacts: [:]
             )
         )
@@ -279,18 +319,130 @@ struct EvidenceContractTests {
     func forgedCommandIsBypassed() {
         let result = EvidenceVerifier.verify(
             validEvidence(),
-            expected: expectation(commands: ["static": ["true"]])
+            expected: expectation(
+                commands: [
+                    "static": EvidenceCommandExpectation(commandLine: ["true"])
+                ]
+            )
         )
 
         #expect(result.verdict == .bypassed)
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.COMMAND_SET_MISMATCH"))
     }
 
+    @Test("A permission action cannot be omitted from trusted command context")
+    func omittedCommandActionIsBypassed() {
+        let evidence = validEvidence(
+            commands: [
+                EvidenceCommand(
+                    id: "tests",
+                    commandLine: ["swift", "test"],
+                    exitCode: 0
+                )
+            ],
+            gates: [
+                EvidenceGate(
+                    id: "QC.TESTS",
+                    status: .pass,
+                    message: "Tests passed.",
+                    commandID: "tests"
+                )
+            ],
+            artifacts: []
+        )
+        let expected = expectation(
+            commands: [
+                "tests": EvidenceCommandExpectation(
+                    commandLine: ["swift", "test"],
+                    action: .localTestExecution
+                )
+            ],
+            gates: [
+                "QC.TESTS": EvidenceGateExpectation(
+                    commandID: "tests",
+                    action: .localTestExecution
+                )
+            ],
+            userAuthorizedActions: [.localTestExecution],
+            artifacts: [:]
+        )
+
+        let result = EvidenceVerifier.verify(evidence, expected: expected)
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.COMMAND_SET_MISMATCH"))
+    }
+
+    @Test("Each gate remains bound to its trusted command")
+    func gateCannotBorrowAnotherCommandOutcome() {
+        let evidence = validEvidence(
+            commands: [
+                EvidenceCommand(
+                    id: "static",
+                    commandLine: ["quality", "static"],
+                    exitCode: 0
+                ),
+                EvidenceCommand(
+                    id: "tests",
+                    commandLine: ["swift", "test"],
+                    exitCode: nil,
+                    action: .localTestExecution,
+                    authorization: .user
+                )
+            ],
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: "Static passed.",
+                    commandID: "static"
+                ),
+                EvidenceGate(
+                    id: "QC.TESTS",
+                    status: .pass,
+                    message: "Tests allegedly passed.",
+                    commandID: "static"
+                )
+            ],
+            artifacts: []
+        )
+        let expected = expectation(
+            commands: [
+                "static": EvidenceCommandExpectation(commandLine: ["quality", "static"]),
+                "tests": EvidenceCommandExpectation(
+                    commandLine: ["swift", "test"],
+                    action: .localTestExecution
+                )
+            ],
+            gates: [
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
+                "QC.TESTS": EvidenceGateExpectation(
+                    commandID: "tests",
+                    action: .localTestExecution
+                )
+            ],
+            userAuthorizedActions: [.localTestExecution],
+            artifacts: [:]
+        )
+
+        let result = EvidenceVerifier.verify(evidence, expected: expected)
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
+    }
+
     @Test("Missing expected gate evidence is BYPASSED")
     func missingGateIsBypassed() {
         let result = EvidenceVerifier.verify(
             validEvidence(),
-            expected: expectation(gateIDs: ["QC.STATIC", "QC.TESTS"])
+            expected: expectation(
+                gates: [
+                    "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
+                    "QC.TESTS": EvidenceGateExpectation(
+                        action: .localTestExecution
+                    )
+                ]
+            )
         )
 
         #expect(result.verdict == .bypassed)
@@ -337,6 +489,39 @@ struct EvidenceContractTests {
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.TEST_COUNTS_MISMATCH"))
     }
 
+    @Test("Untrusted test counts cannot overflow the verifier")
+    func overflowingTestCountsAreBypassed() {
+        let counts = EvidenceTestCounts(
+            total: 0,
+            passed: .max,
+            failed: 1,
+            skipped: 0
+        )
+        let evidence = validEvidence(testCounts: counts)
+
+        let result = EvidenceVerifier.verify(
+            evidence,
+            expected: expectation(testCounts: counts, testGateID: "QC.STATIC")
+        )
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.INVALID_TEST_COUNTS"))
+    }
+
+    @Test("Trusted failed test counts cannot verify as READY")
+    func failedTestCountsRejectReady() {
+        let counts = EvidenceTestCounts(total: 1, passed: 0, failed: 1, skipped: 0)
+        let evidence = validEvidence(testCounts: counts)
+
+        let result = EvidenceVerifier.verify(
+            evidence,
+            expected: expectation(testCounts: counts, testGateID: "QC.STATIC")
+        )
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.TEST_COUNT_GATE_MISMATCH"))
+    }
+
     @Test("PASS evidence requires a zero command exit code")
     func passWithNonzeroExitIsBypassed() {
         let evidence = validEvidence(
@@ -370,7 +555,9 @@ struct EvidenceContractTests {
 
         let result = EvidenceVerifier.verify(
             evidence,
-            expected: expectation(gateIDs: ["QC.TESTS"])
+            expected: expectation(
+                gates: ["QC.TESTS": EvidenceGateExpectation()]
+            )
         )
 
         #expect(result.verdict == .bypassed)
@@ -393,6 +580,7 @@ struct EvidenceContractTests {
         permissions: PermissionPolicy? = nil,
         commands: [EvidenceCommand]? = nil,
         gates: [EvidenceGate]? = nil,
+        testCounts: EvidenceTestCounts? = nil,
         reviewRevision: String? = nil,
         artifacts: [EvidenceArtifact]? = nil,
         claimedVerdict: AdvisoryVerdict = .ready
@@ -421,7 +609,7 @@ struct EvidenceContractTests {
                     commandID: "static"
                 )
             ],
-            testCounts: nil,
+            testCounts: testCounts,
             reviewRevision: reviewRevision,
             artifacts: artifacts ?? [
                 EvidenceArtifact(path: "reports/static.json", sha256: artifactHash)
@@ -434,9 +622,11 @@ struct EvidenceContractTests {
     private func expectation(
         sourceRevision: String? = nil,
         artifactHash: String? = nil,
-        commands: [String: [String]]? = nil,
-        gateIDs: Set<String>? = nil,
+        commands: [String: EvidenceCommandExpectation]? = nil,
+        gates: [String: EvidenceGateExpectation]? = nil,
         userAuthorizedActions: Set<PermissionAction> = [],
+        testCounts: EvidenceTestCounts? = nil,
+        testGateID: String? = nil,
         artifacts: [String: String]? = nil
     ) -> EvidenceExpectation {
         EvidenceExpectation(
@@ -448,11 +638,17 @@ struct EvidenceContractTests {
             profileSHA256: profileHash,
             toolchain: toolchain,
             permissions: policy,
-            commandLinesByID: commands ?? [
-                "static": ["swift", "run", "quality", "static"]
+            commandsByID: commands ?? [
+                "static": EvidenceCommandExpectation(
+                    commandLine: ["swift", "run", "quality", "static"]
+                )
             ],
-            gateIDs: gateIDs ?? ["QC.STATIC"],
+            gatesByID: gates ?? [
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static")
+            ],
             userAuthorizedActions: userAuthorizedActions,
+            testCounts: testCounts,
+            testGateID: testGateID,
             artifactSHA256ByPath: artifacts ?? [
                 "reports/static.json": artifactHash ?? self.artifactHash
             ],

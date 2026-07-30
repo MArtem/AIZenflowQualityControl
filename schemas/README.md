@@ -17,5 +17,6 @@ static-policy directory/suffix list is capped at 256 unique entries.
 for exact source/engine/profile identity, toolchain and permissions, executed commands, explicit
 gate statuses, optional test counts and review SHA, artifact hashes, residual risks, and the claimed
 advisory verdict. Runtime verification additionally requires trusted out-of-band expectations for
-the complete command set, complete gate set, user-authorized actions, and artifact hashes. The
-schema is not yet wired to a CLI evidence loader or producer.
+the complete command/action set, exact gate-to-command bindings, user-authorized actions,
+test-count gate, and artifact hashes. The schema is not yet wired to a CLI evidence loader or
+producer.

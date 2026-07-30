@@ -14,7 +14,9 @@ Test creation, modification, and execution remain separately user-controlled. Te
 inputs and SwiftPM scratch output must stay under `.quality-control-cache/` inside the repository.
 
 After explicit local-execution permission, run the following from the repository root. The Stage
-7/9A contained run on 2026-07-30 passed 40 tests in four suites with warnings treated as errors:
+7/9A corrective contained run on 2026-07-30 passed 44 tests in four suites with warnings treated as
+errors. It includes regressions for omitted permission actions, borrowed command outcomes, integer
+overflow in untrusted counts, and failed-count `READY` claims:
 
 ```bash
 QC_SWIFT_TEST_ROOT="${PWD}/.quality-control-cache/swift-tests"
