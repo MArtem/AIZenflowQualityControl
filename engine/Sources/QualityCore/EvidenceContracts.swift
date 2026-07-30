@@ -94,20 +94,20 @@ public struct EvidenceToolchain: Codable, Equatable, Sendable {
 
 public struct EvidenceCommand: Codable, Sendable {
     public let id: String
-    public let commandLine: [String]
+    public let commandSHA256: String
     public let exitCode: Int
     public let actions: [PermissionAction]
     public let authorization: EvidenceAuthorization
 
     public init(
         id: String,
-        commandLine: [String],
+        commandSHA256: String,
         exitCode: Int,
         actions: [PermissionAction] = [],
         authorization: EvidenceAuthorization = .notRequired
     ) {
         self.id = id
-        self.commandLine = commandLine
+        self.commandSHA256 = commandSHA256
         self.exitCode = exitCode
         self.actions = actions
         self.authorization = authorization
@@ -216,16 +216,16 @@ public struct QualityEvidence: Codable, Sendable {
 }
 
 public struct EvidenceCommandExpectation: Equatable, Sendable {
-    public let commandLine: [String]
+    public let commandSHA256: String
     public let exitCode: Int
     public let actions: Set<PermissionAction>
 
     public init(
-        commandLine: [String],
+        commandSHA256: String,
         exitCode: Int,
         actions: Set<PermissionAction> = []
     ) {
-        self.commandLine = commandLine
+        self.commandSHA256 = commandSHA256
         self.exitCode = exitCode
         self.actions = actions
     }
@@ -472,7 +472,7 @@ public enum EvidenceVerifier {
                 && expectedByID.allSatisfy { id, expectation in
                     commands.contains {
                         $0.id == id
-                            && $0.commandLine == expectation.commandLine
+                            && $0.commandSHA256 == expectation.commandSHA256
                             && $0.exitCode == expectation.exitCode
                             && Set($0.actions) == expectation.actions
                             && Set($0.actions).count == $0.actions.count
@@ -484,10 +484,13 @@ public enum EvidenceVerifier {
 
         for command in commands {
             require(
-                !command.id.isEmpty && !command.commandLine.isEmpty
-                    && command.commandLine.allSatisfy { !$0.isEmpty }
-                    && (0...255).contains(command.exitCode),
+                !command.id.isEmpty && (0...255).contains(command.exitCode),
                 "QC.EVIDENCE.INVALID_COMMAND",
+                &issues
+            )
+            validateSHA256(
+                command.commandSHA256,
+                code: "QC.EVIDENCE.INVALID_COMMAND_HASH",
                 &issues
             )
             require(
@@ -698,7 +701,7 @@ public enum EvidenceVerifier {
         }
 
         let nestedCollectionsAreBounded = evidence.commands.allSatisfy {
-            $0.commandLine.count <= 256 && $0.actions.count <= PermissionAction.allCases.count
+            $0.actions.count <= PermissionAction.allCases.count
         } && evidence.gates.allSatisfy {
             $0.actions.count <= PermissionAction.allCases.count
         }
@@ -719,7 +722,6 @@ public enum EvidenceVerifier {
         ].allSatisfy(isBoundedNonEmptyString)
             && evidence.commands.allSatisfy {
                 isBoundedNonEmptyString($0.id)
-                    && $0.commandLine.allSatisfy(isBoundedNonEmptyString)
             }
             && evidence.gates.allSatisfy {
                 isBoundedNonEmptyString($0.id)

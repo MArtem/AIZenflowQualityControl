@@ -88,10 +88,11 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
   `AUTHORIZED_BY_PROFILE`, `USER_AUTHORIZATION_REQUIRED`, or `PROHIBITED`.
 - User authorization is trusted only when supplied out of band in `EvidenceExpectation`; a
   self-asserted `USER` value inside evidence is insufficient.
-- Expected command lines, exit codes, and complete permission-action sets, exact gate-to-command
-  bindings, trusted non-executed gate statuses, source and engine revisions, profile/toolchain
-  facts, permission snapshot, test counts, and artifact hashes are supplied by the verifier caller
-  rather than copied from the evidence under review.
+- Expected command SHA-256 identities, exit codes, and complete permission-action sets, exact
+  gate-to-command bindings, trusted non-executed gate statuses, source and engine revisions,
+  profile/toolchain facts, permission snapshot, test counts, and artifact hashes are supplied by
+  the verifier caller rather than copied from the evidence under review. Raw argv is not serialized
+  into evidence.
 - Every recorded command has a bounded terminal exit code. Every action in a multi-permission
   command is evaluated independently, every command is accounted for by a gate, and gates must
   carry the same complete action set.

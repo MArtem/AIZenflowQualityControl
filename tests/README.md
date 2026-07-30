@@ -6,8 +6,8 @@ engine. Tests use Swift Testing and remain isolated from application test target
 The verifier suite covers result aggregation, malformed and bounded profile/policy inputs,
 path/symlink boundaries, scan ceilings and cooperative timeouts, immutable policy floors, committed
 passing/failing fixtures, independent permission decisions, and versioned evidence verification.
-Evidence cases prove that stale source/review SHAs, changed permission snapshots, forged command or
-artifact sets, incomplete multi-action authorization, missing or forged terminal outcomes,
+Evidence cases prove that stale source/review SHAs, changed permission snapshots, forged command
+identities or artifact sets, incomplete multi-action authorization, missing or forged terminal outcomes,
 unaccounted commands, upgraded non-executed statuses, missing trusted user authorization,
 prohibited execution, nonzero `PASS` commands, all-skipped counts, skipped gates, and false claimed
 verdicts cannot produce normal `READY`. Collection-limit regressions also prove that oversized
@@ -18,7 +18,8 @@ inputs and SwiftPM scratch output must stay under `.quality-control-cache/` insi
 
 After explicit local-execution permission, run the following from the repository root. The Stage
 7/9A corrective contained run on 2026-07-30 passed 53 tests in four suites with warnings treated as
-errors. It includes regressions for complete permission-action sets, trusted terminal outcomes,
+errors. It includes regressions for digest-only command identity without raw argv, complete
+permission-action sets, trusted terminal outcomes, status-dependent gate command IDs,
 gate accounting for every command, trusted non-executed statuses, early collection-limit returns,
 schema/runtime path and Unicode-length parity, unique residual risks, all-skipped counts, integer
 overflow in untrusted counts, and failed-count `READY` claims:

@@ -8,6 +8,11 @@ struct EvidenceContractTests {
     private let engineRevision = String(repeating: "b", count: 40)
     private let profileHash = String(repeating: "c", count: 64)
     private let artifactHash = String(repeating: "d", count: 64)
+    private let staticCommandHash = String(repeating: "e", count: 64)
+    private let testsCommandHash = String(repeating: "f", count: 64)
+    private let uiCommandHash = String(repeating: "0", count: 64)
+    private let auxiliaryCommandHash = String(repeating: "1", count: 64)
+    private let forgedCommandHash = String(repeating: "2", count: 64)
     private let toolchain = EvidenceToolchain(
         swiftVersion: "Apple Swift 6.1.2",
         xcodeVersion: "Xcode 16.4 (16F6)"
@@ -130,7 +135,7 @@ struct EvidenceContractTests {
     func prohibitedCommandIsBypassed() {
         let command = EvidenceCommand(
             id: "tests",
-            commandLine: ["swift", "test"],
+            commandSHA256: testsCommandHash,
             exitCode: 0,
             actions: [.testModification],
             authorization: .user
@@ -155,7 +160,7 @@ struct EvidenceContractTests {
             expected: expectation(
                 commands: [
                     "tests": EvidenceCommandExpectation(
-                        commandLine: ["swift", "test"],
+                        commandSHA256: testsCommandHash,
                         exitCode: 0,
                         actions: [.testModification]
                     )
@@ -178,7 +183,7 @@ struct EvidenceContractTests {
     func missingUserAuthorizationIsBypassed() {
         let command = EvidenceCommand(
             id: "tests",
-            commandLine: ["swift", "test"],
+            commandSHA256: testsCommandHash,
             exitCode: 0,
             actions: [.localTestExecution],
             authorization: .profile
@@ -203,7 +208,7 @@ struct EvidenceContractTests {
             expected: expectation(
                 commands: [
                     "tests": EvidenceCommandExpectation(
-                        commandLine: ["swift", "test"],
+                        commandSHA256: testsCommandHash,
                         exitCode: 0,
                         actions: [.localTestExecution]
                     )
@@ -226,7 +231,7 @@ struct EvidenceContractTests {
     func trustedUserAuthorizationIsAccepted() {
         let command = EvidenceCommand(
             id: "tests",
-            commandLine: ["swift", "test"],
+            commandSHA256: testsCommandHash,
             exitCode: 0,
             actions: [.localTestExecution],
             authorization: .user
@@ -251,7 +256,7 @@ struct EvidenceContractTests {
             expected: expectation(
                 commands: [
                     "tests": EvidenceCommandExpectation(
-                        commandLine: ["swift", "test"],
+                        commandSHA256: testsCommandHash,
                         exitCode: 0,
                         actions: [.localTestExecution]
                     )
@@ -282,7 +287,7 @@ struct EvidenceContractTests {
             commands: [
                 EvidenceCommand(
                     id: "ui-tests",
-                    commandLine: ["xcodebuild", "test"],
+                    commandSHA256: uiCommandHash,
                     exitCode: 0,
                     actions: actions,
                     authorization: .user
@@ -302,7 +307,7 @@ struct EvidenceContractTests {
         let expected = expectation(
             commands: [
                 "ui-tests": EvidenceCommandExpectation(
-                    commandLine: ["xcodebuild", "test"],
+                    commandSHA256: uiCommandHash,
                     exitCode: 0,
                     actions: Set(actions)
                 )
@@ -327,7 +332,7 @@ struct EvidenceContractTests {
     func selfAssertedUserAuthorizationIsBypassed() {
         let command = EvidenceCommand(
             id: "tests",
-            commandLine: ["swift", "test"],
+            commandSHA256: testsCommandHash,
             exitCode: 0,
             actions: [.localTestExecution],
             authorization: .user
@@ -352,7 +357,7 @@ struct EvidenceContractTests {
             expected: expectation(
                 commands: [
                     "tests": EvidenceCommandExpectation(
-                        commandLine: ["swift", "test"],
+                        commandSHA256: testsCommandHash,
                         exitCode: 0,
                         actions: [.localTestExecution]
                     )
@@ -371,14 +376,14 @@ struct EvidenceContractTests {
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.MISSING_USER_AUTHORIZATION"))
     }
 
-    @Test("A forged command line is BYPASSED")
-    func forgedCommandIsBypassed() {
+    @Test("A forged command identity is BYPASSED")
+    func forgedCommandIdentityIsBypassed() {
         let result = EvidenceVerifier.verify(
             validEvidence(),
             expected: expectation(
                 commands: [
                     "static": EvidenceCommandExpectation(
-                        commandLine: ["true"],
+                        commandSHA256: forgedCommandHash,
                         exitCode: 0
                     )
                 ]
@@ -396,7 +401,7 @@ struct EvidenceContractTests {
             expected: expectation(
                 commands: [
                     "static": EvidenceCommandExpectation(
-                        commandLine: ["swift", "run", "quality", "static"],
+                        commandSHA256: staticCommandHash,
                         exitCode: 1
                     )
                 ]
@@ -413,7 +418,7 @@ struct EvidenceContractTests {
             commands: [
                 EvidenceCommand(
                     id: "tests",
-                    commandLine: ["swift", "test"],
+                    commandSHA256: testsCommandHash,
                     exitCode: 0
                 )
             ],
@@ -430,7 +435,7 @@ struct EvidenceContractTests {
         let expected = expectation(
             commands: [
                 "tests": EvidenceCommandExpectation(
-                    commandLine: ["swift", "test"],
+                    commandSHA256: testsCommandHash,
                     exitCode: 0,
                     actions: [.localTestExecution]
                 )
@@ -457,12 +462,12 @@ struct EvidenceContractTests {
             commands: [
                 EvidenceCommand(
                     id: "static",
-                    commandLine: ["quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 ),
                 EvidenceCommand(
                     id: "tests",
-                    commandLine: ["swift", "test"],
+                    commandSHA256: testsCommandHash,
                     exitCode: 0,
                     actions: [.localTestExecution],
                     authorization: .user
@@ -487,11 +492,11 @@ struct EvidenceContractTests {
         let expected = expectation(
             commands: [
                 "static": EvidenceCommandExpectation(
-                    commandLine: ["quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 ),
                 "tests": EvidenceCommandExpectation(
-                    commandLine: ["swift", "test"],
+                    commandSHA256: testsCommandHash,
                     exitCode: 0,
                     actions: [.localTestExecution]
                 )
@@ -519,12 +524,12 @@ struct EvidenceContractTests {
             commands: [
                 EvidenceCommand(
                     id: "static",
-                    commandLine: ["quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 ),
                 EvidenceCommand(
                     id: "auxiliary",
-                    commandLine: ["quality", "auxiliary"],
+                    commandSHA256: auxiliaryCommandHash,
                     exitCode: 1
                 )
             ],
@@ -541,11 +546,11 @@ struct EvidenceContractTests {
         let expected = expectation(
             commands: [
                 "static": EvidenceCommandExpectation(
-                    commandLine: ["quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 ),
                 "auxiliary": EvidenceCommandExpectation(
-                    commandLine: ["quality", "auxiliary"],
+                    commandSHA256: auxiliaryCommandHash,
                     exitCode: 1
                 )
             ],
@@ -564,7 +569,7 @@ struct EvidenceContractTests {
     @Test("Every command requires a terminal exit code")
     func commandWithoutExitCodeDoesNotDecode() {
         let json = Data(
-            #"{"id":"static","commandLine":["quality","static"],"actions":[],"authorization":"NOT_REQUIRED"}"#.utf8
+            #"{"id":"static","commandSHA256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","actions":[],"authorization":"NOT_REQUIRED"}"#.utf8
         )
 
         #expect(throws: DecodingError.self) {
@@ -639,7 +644,7 @@ struct EvidenceContractTests {
             commands: [
                 EvidenceCommand(
                     id: "static",
-                    commandLine: ["swift", "run", "quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 )
             ],
@@ -717,7 +722,7 @@ struct EvidenceContractTests {
         let commands = (0...256).map { _ in
             EvidenceCommand(
                 id: "duplicate",
-                commandLine: ["true"],
+                commandSHA256: staticCommandHash,
                 exitCode: 0
             )
         }
@@ -735,13 +740,23 @@ struct EvidenceContractTests {
             commands: [
                 EvidenceCommand(
                     id: "static",
-                    commandLine: ["swift", "run", "quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 1
                 )
             ]
         )
 
-        let result = EvidenceVerifier.verify(evidence, expected: expectation())
+        let result = EvidenceVerifier.verify(
+            evidence,
+            expected: expectation(
+                commands: [
+                    "static": EvidenceCommandExpectation(
+                        commandSHA256: staticCommandHash,
+                        exitCode: 1
+                    )
+                ]
+            )
+        )
 
         #expect(result.verdict == .bypassed)
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.PASS_EXIT_CODE_MISMATCH"))
@@ -778,11 +793,18 @@ struct EvidenceContractTests {
         let evidence = validEvidence()
         let encoded = try JSONEncoder().encode(evidence)
         let decoded = try JSONDecoder().decode(QualityEvidence.self, from: encoded)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        let commands = try #require(object["commands"] as? [[String: Any]])
+        let command = try #require(commands.first)
 
         #expect(decoded.schemaVersion == 1)
         #expect(decoded.sourceRevision == sourceRevision)
         #expect(decoded.gates.map(\.status) == [.pass])
         #expect(decoded.claimedVerdict == .ready)
+        #expect(command["commandLine"] == nil)
+        #expect(command["commandSHA256"] as? String == staticCommandHash)
     }
 
     @Test("Runtime string limits use schema Unicode-length units")
@@ -817,8 +839,8 @@ struct EvidenceContractTests {
         #expect(rejectedResult.issues.map(\.code) == ["QC.EVIDENCE.STRING_LIMIT"])
     }
 
-    @Test("Schema relative paths match runtime segment rules")
-    func schemaRejectsUnsafeRelativePaths() throws {
+    @Test("Schema constraints match runtime evidence rules")
+    func schemaConstraintsMatchRuntime() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -832,6 +854,45 @@ struct EvidenceContractTests {
         )
         let definitions = try #require(schema["$defs"] as? [String: Any])
         let properties = try #require(schema["properties"] as? [String: Any])
+        let commandCollection = try #require(properties["commands"] as? [String: Any])
+        let commandSchema = try #require(commandCollection["items"] as? [String: Any])
+        let commandProperties = try #require(commandSchema["properties"] as? [String: Any])
+        let commandRequired = try #require(commandSchema["required"] as? [String])
+        #expect(commandProperties["commandLine"] == nil)
+        #expect(commandProperties["commandSHA256"] != nil)
+        #expect(commandRequired.contains("commandSHA256"))
+
+        let gateCollection = try #require(properties["gates"] as? [String: Any])
+        let gateSchema = try #require(gateCollection["items"] as? [String: Any])
+        let gateConditions = try #require(gateSchema["allOf"] as? [[String: Any]])
+        #expect(gateConditions.count == 2)
+
+        let executedIf = try #require(gateConditions[0]["if"] as? [String: Any])
+        let executedProperties = try #require(executedIf["properties"] as? [String: Any])
+        let executedStatus = try #require(executedProperties["status"] as? [String: Any])
+        let executedStatuses = try #require(executedStatus["enum"] as? [String])
+        let executedThen = try #require(gateConditions[0]["then"] as? [String: Any])
+        #expect(Set(executedStatuses) == Set(["PASS", "FAIL"]))
+        #expect(executedThen["required"] as? [String] == ["commandID"])
+
+        let nonExecutedIf = try #require(gateConditions[1]["if"] as? [String: Any])
+        let nonExecutedProperties = try #require(
+            nonExecutedIf["properties"] as? [String: Any]
+        )
+        let nonExecutedStatus = try #require(
+            nonExecutedProperties["status"] as? [String: Any]
+        )
+        let nonExecutedStatuses = try #require(nonExecutedStatus["enum"] as? [String])
+        let nonExecutedThen = try #require(
+            gateConditions[1]["then"] as? [String: Any]
+        )
+        let forbiddenCommandID = try #require(nonExecutedThen["not"] as? [String: Any])
+        #expect(
+            Set(nonExecutedStatuses)
+                == Set(["NOT_APPLICABLE", "NOT_RUN_BY_USER_DECISION", "SKIPPED"])
+        )
+        #expect(forbiddenCommandID["required"] as? [String] == ["commandID"])
+
         let residualRisks = try #require(properties["residualRisks"] as? [String: Any])
         let nonEmptyString = try #require(definitions["nonEmptyString"] as? [String: Any])
         #expect(residualRisks["uniqueItems"] as? Bool == true)
@@ -878,7 +939,7 @@ struct EvidenceContractTests {
             commands: commands ?? [
                 EvidenceCommand(
                     id: "static",
-                    commandLine: ["swift", "run", "quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 )
             ],
@@ -921,7 +982,7 @@ struct EvidenceContractTests {
             permissions: policy,
             commandsByID: commands ?? [
                 "static": EvidenceCommandExpectation(
-                    commandLine: ["swift", "run", "quality", "static"],
+                    commandSHA256: staticCommandHash,
                     exitCode: 0
                 )
             ],

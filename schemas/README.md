@@ -14,11 +14,13 @@ decoding, and cap JSON nesting at 64 containers. Project profile schema version 
 static-policy directory/suffix list is capped at 256 unique entries.
 
 `quality-evidence.schema.json` defines evidence schema version 1. It is a closed, bounded contract
-for exact source/engine/profile identity, toolchain and permissions, executed commands, explicit
-gate statuses, optional test counts and review SHA, artifact hashes, residual risks, and the claimed
-advisory verdict. Runtime verification additionally requires trusted out-of-band expectations for
-the complete command/action sets, terminal command outcomes, exact gate-to-command bindings,
-trusted non-executed gate statuses, user-authorized actions, test-count gate, and artifact hashes.
+for exact source/engine/profile identity, toolchain and permissions, SHA-256 command identities,
+explicit gate statuses, optional test counts and review SHA, artifact hashes, residual risks, and
+the claimed advisory verdict. Raw command arguments are excluded from the evidence model. Runtime
+verification additionally requires trusted out-of-band expectations for the complete
+command/action sets, terminal command outcomes, exact gate-to-command bindings, trusted
+non-executed gate statuses, user-authorized actions, test-count gate, and artifact hashes.
+The schema requires `commandID` for `PASS`/`FAIL` and forbids it for explicit non-executed states.
 Artifact paths use the same non-empty relative-segment rules in schema and runtime. The schema is
 not yet wired to a CLI evidence loader or producer. Bounded strings use Unicode-scalar length in
 runtime to match JSON Schema code-point length, and residual-risk entries are unique in both layers.
