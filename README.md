@@ -13,10 +13,11 @@ authorization, and prohibited actions independently for test creation, test modi
 test execution, manual GitHub execution, UI tests, Simulator/device work, and performance work.
 
 Evidence schema version 1 represents exact source/engine/profile identity, toolchain, permission
-snapshot, command lines, gate results, test counts, review revision, artifact hashes, residual risk,
-and an advisory verdict. Verification compares untrusted evidence with caller-supplied trusted
-expectations and returns `BYPASSED` for stale identity, changed permissions, missing/extra commands
-or gates, forged artifact sets, stale review SHA, invalid authorization, or a false claimed verdict.
+snapshot, terminal command outcomes with complete permission-action sets, gate results, test counts,
+review revision, artifact hashes, residual risk, and an advisory verdict. Verification compares
+untrusted evidence with caller-supplied trusted expectations and returns `BYPASSED` for stale
+identity, changed permissions, missing/extra commands or gates, forged artifact sets, stale review
+SHA, invalid authorization, or a false claimed verdict.
 
 The repository still contains no automatic push/PR workflow, hook, application profile, or
 application integration. Stage 9A does not add an evidence CLI/loader, cryptographic attestation,
@@ -87,9 +88,12 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
   `AUTHORIZED_BY_PROFILE`, `USER_AUTHORIZATION_REQUIRED`, or `PROHIBITED`.
 - User authorization is trusted only when supplied out of band in `EvidenceExpectation`; a
   self-asserted `USER` value inside evidence is insufficient.
-- Expected command lines and permission actions, exact gate-to-command bindings, source and engine
-  revisions, profile/toolchain facts, permission snapshot, test counts, and artifact hashes are
-  supplied by the verifier caller rather than copied from the evidence under review.
+- Expected command lines and complete permission-action sets, exact gate-to-command bindings,
+  trusted non-executed gate statuses, source and engine revisions, profile/toolchain facts,
+  permission snapshot, test counts, and artifact hashes are supplied by the verifier caller rather
+  than copied from the evidence under review.
+- Every recorded command has a bounded terminal exit code. Every action in a multi-permission
+  command is evaluated independently, and gates must carry the same complete action set.
 - `SKIPPED` aggregates to `BLOCKED`, `NOT_RUN_BY_USER_DECISION` to `NEEDS_OWNER_DECISION`, and a
   claimed verdict inconsistent with the gate set becomes `BYPASSED`.
 - `READY_WITH_ACCEPTED_RISK` is represented but is not automatically derived; ownership and

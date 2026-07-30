@@ -30,8 +30,13 @@
       "items": {
         "additionalProperties": false,
         "properties": {
-          "action": {
-            "$ref": "#/$defs/permissionAction"
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/permissionAction"
+            },
+            "maxItems": 7,
+            "type": "array",
+            "uniqueItems": true
           },
           "authorization": {
             "enum": [
@@ -60,6 +65,8 @@
         "required": [
           "id",
           "commandLine",
+          "exitCode",
+          "actions",
           "authorization"
         ],
         "type": "object"
@@ -78,8 +85,13 @@
       "items": {
         "additionalProperties": false,
         "properties": {
-          "action": {
-            "$ref": "#/$defs/permissionAction"
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/permissionAction"
+            },
+            "maxItems": 7,
+            "type": "array",
+            "uniqueItems": true
           },
           "commandID": {
             "$ref": "#/$defs/nonEmptyString"
@@ -97,7 +109,8 @@
         "required": [
           "id",
           "status",
-          "message"
+          "message",
+          "actions"
         ],
         "type": "object"
       },
@@ -294,6 +307,11 @@
         {
           "not": {
             "pattern": "^(?:/|~)|(?:^|/)\\.\\.(?:/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.(?:/|$)|//|/$"
           }
         }
       ]

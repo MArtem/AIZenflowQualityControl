@@ -95,21 +95,21 @@ public struct EvidenceToolchain: Codable, Equatable, Sendable {
 public struct EvidenceCommand: Codable, Sendable {
     public let id: String
     public let commandLine: [String]
-    public let exitCode: Int?
-    public let action: PermissionAction?
+    public let exitCode: Int
+    public let actions: [PermissionAction]
     public let authorization: EvidenceAuthorization
 
     public init(
         id: String,
         commandLine: [String],
-        exitCode: Int?,
-        action: PermissionAction? = nil,
+        exitCode: Int,
+        actions: [PermissionAction] = [],
         authorization: EvidenceAuthorization = .notRequired
     ) {
         self.id = id
         self.commandLine = commandLine
         self.exitCode = exitCode
-        self.action = action
+        self.actions = actions
         self.authorization = authorization
     }
 }
@@ -119,20 +119,20 @@ public struct EvidenceGate: Codable, Sendable {
     public let status: GateStatus
     public let message: String
     public let commandID: String?
-    public let action: PermissionAction?
+    public let actions: [PermissionAction]
 
     public init(
         id: String,
         status: GateStatus,
         message: String,
         commandID: String? = nil,
-        action: PermissionAction? = nil
+        actions: [PermissionAction] = []
     ) {
         self.id = id
         self.status = status
         self.message = message
         self.commandID = commandID
-        self.action = action
+        self.actions = actions
     }
 }
 
@@ -217,21 +217,30 @@ public struct QualityEvidence: Codable, Sendable {
 
 public struct EvidenceCommandExpectation: Equatable, Sendable {
     public let commandLine: [String]
-    public let action: PermissionAction?
+    public let actions: Set<PermissionAction>
 
-    public init(commandLine: [String], action: PermissionAction? = nil) {
+    public init(
+        commandLine: [String],
+        actions: Set<PermissionAction> = []
+    ) {
         self.commandLine = commandLine
-        self.action = action
+        self.actions = actions
     }
 }
 
 public struct EvidenceGateExpectation: Equatable, Sendable {
     public let commandID: String?
-    public let action: PermissionAction?
+    public let actions: Set<PermissionAction>
+    public let nonExecutedStatus: GateStatus?
 
-    public init(commandID: String? = nil, action: PermissionAction? = nil) {
+    public init(
+        commandID: String? = nil,
+        actions: Set<PermissionAction> = [],
+        nonExecutedStatus: GateStatus? = nil
+    ) {
         self.commandID = commandID
-        self.action = action
+        self.actions = actions
+        self.nonExecutedStatus = nonExecutedStatus
     }
 }
 
@@ -318,6 +327,9 @@ public enum EvidenceVerifier {
         var issues: [EvidenceVerificationIssue] = []
 
         require(evidence.schemaVersion == 1, "QC.EVIDENCE.UNSUPPORTED_SCHEMA", &issues)
+        guard validateBounds(evidence, issues: &issues) else {
+            return EvidenceVerification(verdict: .bypassed, issues: issues)
+        }
         require(
             !evidence.sourceRepository.isEmpty
                 && evidence.sourceRepository == expected.sourceRepository,
@@ -365,7 +377,6 @@ public enum EvidenceVerifier {
             &issues
         )
 
-        validateBounds(evidence, issues: &issues)
         validateCommands(
             evidence.commands,
             policy: evidence.permissions,
@@ -459,7 +470,8 @@ public enum EvidenceVerifier {
                     commands.contains {
                         $0.id == id
                             && $0.commandLine == expectation.commandLine
-                            && $0.action == expectation.action
+                            && Set($0.actions) == expectation.actions
+                            && Set($0.actions).count == $0.actions.count
                     }
                 },
             "QC.EVIDENCE.COMMAND_SET_MISMATCH",
@@ -470,12 +482,17 @@ public enum EvidenceVerifier {
             require(
                 !command.id.isEmpty && !command.commandLine.isEmpty
                     && command.commandLine.allSatisfy { !$0.isEmpty }
-                    && command.exitCode.map { (0...255).contains($0) } != false,
+                    && (0...255).contains(command.exitCode),
                 "QC.EVIDENCE.INVALID_COMMAND",
                 &issues
             )
+            require(
+                Set(command.actions).count == command.actions.count,
+                "QC.EVIDENCE.DUPLICATE_COMMAND_ACTION",
+                &issues
+            )
 
-            guard let action = command.action else {
+            guard !command.actions.isEmpty else {
                 require(
                     command.authorization == .notRequired,
                     "QC.EVIDENCE.UNEXPECTED_COMMAND_AUTHORIZATION",
@@ -484,21 +501,33 @@ public enum EvidenceVerifier {
                 continue
             }
 
-            switch PermissionEvaluator.requirement(for: action, policy: policy) {
-            case .authorizedByProfile:
+            var requiresUserAuthorization = false
+            var containsProhibitedAction = false
+            for action in command.actions {
+                switch PermissionEvaluator.requirement(for: action, policy: policy) {
+                case .authorizedByProfile:
+                    break
+                case .userAuthorizationRequired:
+                    requiresUserAuthorization = true
+                    require(
+                        userAuthorizedActions.contains(action),
+                        "QC.EVIDENCE.MISSING_USER_AUTHORIZATION",
+                        &issues
+                    )
+                case .prohibited:
+                    containsProhibitedAction = true
+                    require(false, "QC.EVIDENCE.PROHIBITED_COMMAND_EXECUTED", &issues)
+                }
+            }
+
+            if !containsProhibitedAction {
                 require(
-                    command.authorization == .profile,
-                    "QC.EVIDENCE.INVALID_PROFILE_AUTHORIZATION",
+                    command.authorization == (requiresUserAuthorization ? .user : .profile),
+                    requiresUserAuthorization
+                        ? "QC.EVIDENCE.MISSING_USER_AUTHORIZATION"
+                        : "QC.EVIDENCE.INVALID_PROFILE_AUTHORIZATION",
                     &issues
                 )
-            case .userAuthorizationRequired:
-                require(
-                    command.authorization == .user && userAuthorizedActions.contains(action),
-                    "QC.EVIDENCE.MISSING_USER_AUTHORIZATION",
-                    &issues
-                )
-            case .prohibited:
-                require(false, "QC.EVIDENCE.PROHIBITED_COMMAND_EXECUTED", &issues)
             }
         }
     }
@@ -521,7 +550,9 @@ public enum EvidenceVerifier {
                     gates.contains {
                         $0.id == id
                             && $0.commandID == expectation.commandID
-                            && $0.action == expectation.action
+                            && Set($0.actions) == expectation.actions
+                            && Set($0.actions).count == $0.actions.count
+                            && expectedStatusMatches($0.status, expectation: expectation)
                     }
                 },
             "QC.EVIDENCE.GATE_SET_MISMATCH",
@@ -533,6 +564,11 @@ public enum EvidenceVerifier {
             require(
                 !gate.id.isEmpty && !gate.message.isEmpty,
                 "QC.EVIDENCE.INVALID_GATE",
+                &issues
+            )
+            require(
+                Set(gate.actions).count == gate.actions.count,
+                "QC.EVIDENCE.DUPLICATE_GATE_ACTION",
                 &issues
             )
             if let commandID = gate.commandID {
@@ -552,7 +588,7 @@ public enum EvidenceVerifier {
             if let commandID = gate.commandID,
                let command = commands.first(where: { $0.id == commandID }) {
                 require(
-                    gate.action == command.action,
+                    Set(gate.actions) == Set(command.actions),
                     "QC.EVIDENCE.GATE_ACTION_MISMATCH",
                     &issues
                 )
@@ -564,7 +600,7 @@ public enum EvidenceVerifier {
                     )
                 } else if gate.status == .fail {
                     require(
-                        command.exitCode != nil && command.exitCode != 0,
+                        command.exitCode != 0,
                         "QC.EVIDENCE.FAIL_EXIT_CODE_MISMATCH",
                         &issues
                     )
@@ -581,7 +617,7 @@ public enum EvidenceVerifier {
             }
             if gate.status == .notRunByUserDecision {
                 require(
-                    gate.action != nil,
+                    !gate.actions.isEmpty,
                     "QC.EVIDENCE.USER_DECISION_WITHOUT_ACTION",
                     &issues
                 )
@@ -620,7 +656,7 @@ public enum EvidenceVerifier {
         }
 
         let expectedStatus: GateStatus
-        if counts.total == 0 {
+        if counts.total == 0 || (counts.passed == 0 && counts.failed == 0) {
             expectedStatus = .blocked
         } else if counts.failed > 0 {
             expectedStatus = .fail
@@ -637,12 +673,34 @@ public enum EvidenceVerifier {
     private static func validateBounds(
         _ evidence: QualityEvidence,
         issues: inout [EvidenceVerificationIssue]
-    ) {
-        let collectionsAreBounded = evidence.commands.count <= 256
+    ) -> Bool {
+        let topLevelCollectionsAreBounded = evidence.commands.count <= 256
             && evidence.gates.count <= 256
             && evidence.artifacts.count <= 256
             && evidence.residualRisks.count <= 256
-            && evidence.commands.allSatisfy { $0.commandLine.count <= 256 }
+        require(
+            topLevelCollectionsAreBounded,
+            "QC.EVIDENCE.COLLECTION_LIMIT",
+            &issues
+        )
+        guard topLevelCollectionsAreBounded else {
+            return false
+        }
+
+        let nestedCollectionsAreBounded = evidence.commands.allSatisfy {
+            $0.commandLine.count <= 256 && $0.actions.count <= PermissionAction.allCases.count
+        } && evidence.gates.allSatisfy {
+            $0.actions.count <= PermissionAction.allCases.count
+        }
+        require(
+            nestedCollectionsAreBounded,
+            "QC.EVIDENCE.COLLECTION_LIMIT",
+            &issues
+        )
+        guard nestedCollectionsAreBounded else {
+            return false
+        }
+
         let stringsAreBounded = [
             evidence.sourceRepository,
             evidence.engineVersion,
@@ -661,8 +719,18 @@ public enum EvidenceVerifier {
             && evidence.artifacts.allSatisfy { isBoundedNonEmptyString($0.path) }
             && evidence.residualRisks.allSatisfy(isBoundedNonEmptyString)
 
-        require(collectionsAreBounded, "QC.EVIDENCE.COLLECTION_LIMIT", &issues)
         require(stringsAreBounded, "QC.EVIDENCE.STRING_LIMIT", &issues)
+        return stringsAreBounded
+    }
+
+    private static func expectedStatusMatches(
+        _ status: GateStatus,
+        expectation: EvidenceGateExpectation
+    ) -> Bool {
+        if expectation.commandID == nil {
+            return expectation.nonExecutedStatus == status
+        }
+        return expectation.nonExecutedStatus == nil
     }
 
     private static func validateReviewRevision(

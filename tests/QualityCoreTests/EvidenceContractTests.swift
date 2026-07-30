@@ -132,7 +132,7 @@ struct EvidenceContractTests {
             id: "tests",
             commandLine: ["swift", "test"],
             exitCode: 0,
-            action: .testModification,
+            actions: [.testModification],
             authorization: .user
         )
         let evidence = validEvidence(
@@ -143,7 +143,7 @@ struct EvidenceContractTests {
                     status: .pass,
                     message: "Tests passed.",
                     commandID: "tests",
-                    action: .testModification
+                    actions: [.testModification]
                 )
             ],
             artifacts: [],
@@ -156,13 +156,13 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
-                        action: .testModification
+                        actions: [.testModification]
                     )
                 ],
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        action: .testModification
+                        actions: [.testModification]
                     )
                 ],
                 artifacts: [:]
@@ -179,7 +179,7 @@ struct EvidenceContractTests {
             id: "tests",
             commandLine: ["swift", "test"],
             exitCode: 0,
-            action: .localTestExecution,
+            actions: [.localTestExecution],
             authorization: .profile
         )
         let evidence = validEvidence(
@@ -190,7 +190,7 @@ struct EvidenceContractTests {
                     status: .pass,
                     message: "Tests passed.",
                     commandID: "tests",
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             artifacts: [],
@@ -203,13 +203,13 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
-                        action: .localTestExecution
+                        actions: [.localTestExecution]
                     )
                 ],
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        action: .localTestExecution
+                        actions: [.localTestExecution]
                     )
                 ],
                 artifacts: [:]
@@ -226,7 +226,7 @@ struct EvidenceContractTests {
             id: "tests",
             commandLine: ["swift", "test"],
             exitCode: 0,
-            action: .localTestExecution,
+            actions: [.localTestExecution],
             authorization: .user
         )
         let evidence = validEvidence(
@@ -237,7 +237,7 @@ struct EvidenceContractTests {
                     status: .pass,
                     message: "Tests passed.",
                     commandID: "tests",
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             artifacts: [],
@@ -250,13 +250,13 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
-                        action: .localTestExecution
+                        actions: [.localTestExecution]
                     )
                 ],
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        action: .localTestExecution
+                        actions: [.localTestExecution]
                     )
                 ],
                 userAuthorizedActions: [.localTestExecution],
@@ -268,13 +268,64 @@ struct EvidenceContractTests {
         #expect(result.issues.isEmpty)
     }
 
+    @Test("Every action in a multi-permission command is enforced")
+    func prohibitedMemberOfMultiActionCommandIsBypassed() {
+        let actions: [PermissionAction] = [
+            .uiTests,
+            .localTestExecution,
+            .simulatorOrDevice
+        ]
+        let evidence = validEvidence(
+            commands: [
+                EvidenceCommand(
+                    id: "ui-tests",
+                    commandLine: ["xcodebuild", "test"],
+                    exitCode: 0,
+                    actions: actions,
+                    authorization: .user
+                )
+            ],
+            gates: [
+                EvidenceGate(
+                    id: "QC.UI_TESTS",
+                    status: .pass,
+                    message: "UI tests passed.",
+                    commandID: "ui-tests",
+                    actions: actions
+                )
+            ],
+            artifacts: []
+        )
+        let expected = expectation(
+            commands: [
+                "ui-tests": EvidenceCommandExpectation(
+                    commandLine: ["xcodebuild", "test"],
+                    actions: Set(actions)
+                )
+            ],
+            gates: [
+                "QC.UI_TESTS": EvidenceGateExpectation(
+                    commandID: "ui-tests",
+                    actions: Set(actions)
+                )
+            ],
+            userAuthorizedActions: [.localTestExecution],
+            artifacts: [:]
+        )
+
+        let result = EvidenceVerifier.verify(evidence, expected: expected)
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.PROHIBITED_COMMAND_EXECUTED"))
+    }
+
     @Test("A self-asserted user authorization is not trusted")
     func selfAssertedUserAuthorizationIsBypassed() {
         let command = EvidenceCommand(
             id: "tests",
             commandLine: ["swift", "test"],
             exitCode: 0,
-            action: .localTestExecution,
+            actions: [.localTestExecution],
             authorization: .user
         )
         let evidence = validEvidence(
@@ -285,7 +336,7 @@ struct EvidenceContractTests {
                     status: .pass,
                     message: "Tests passed.",
                     commandID: "tests",
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             artifacts: [],
@@ -298,13 +349,13 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
-                        action: .localTestExecution
+                        actions: [.localTestExecution]
                     )
                 ],
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        action: .localTestExecution
+                        actions: [.localTestExecution]
                     )
                 ],
                 artifacts: [:]
@@ -354,13 +405,13 @@ struct EvidenceContractTests {
             commands: [
                 "tests": EvidenceCommandExpectation(
                     commandLine: ["swift", "test"],
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             gates: [
                 "QC.TESTS": EvidenceGateExpectation(
                     commandID: "tests",
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -385,8 +436,8 @@ struct EvidenceContractTests {
                 EvidenceCommand(
                     id: "tests",
                     commandLine: ["swift", "test"],
-                    exitCode: nil,
-                    action: .localTestExecution,
+                    exitCode: 0,
+                    actions: [.localTestExecution],
                     authorization: .user
                 )
             ],
@@ -411,18 +462,63 @@ struct EvidenceContractTests {
                 "static": EvidenceCommandExpectation(commandLine: ["quality", "static"]),
                 "tests": EvidenceCommandExpectation(
                     commandLine: ["swift", "test"],
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             gates: [
                 "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
                 "QC.TESTS": EvidenceGateExpectation(
                     commandID: "tests",
-                    action: .localTestExecution
+                    actions: [.localTestExecution]
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
             artifacts: [:]
+        )
+
+        let result = EvidenceVerifier.verify(evidence, expected: expected)
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
+    }
+
+    @Test("Every command requires a terminal exit code")
+    func commandWithoutExitCodeDoesNotDecode() {
+        let json = Data(
+            #"{"id":"static","commandLine":["quality","static"],"actions":[],"authorization":"NOT_REQUIRED"}"#.utf8
+        )
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(EvidenceCommand.self, from: json)
+        }
+    }
+
+    @Test("A non-executed gate cannot upgrade its trusted status")
+    func nonExecutedGateStatusUpgradeIsBypassed() {
+        let evidence = validEvidence(
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: "Static passed.",
+                    commandID: "static"
+                ),
+                EvidenceGate(
+                    id: "QC.UI_TESTS",
+                    status: .notApplicable,
+                    message: "UI tests were declared not applicable.",
+                    actions: [.uiTests]
+                )
+            ]
+        )
+        let expected = expectation(
+            gates: [
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
+                "QC.UI_TESTS": EvidenceGateExpectation(
+                    actions: [.uiTests],
+                    nonExecutedStatus: .skipped
+                )
+            ]
         )
 
         let result = EvidenceVerifier.verify(evidence, expected: expected)
@@ -439,7 +535,8 @@ struct EvidenceContractTests {
                 gates: [
                     "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
                     "QC.TESTS": EvidenceGateExpectation(
-                        action: .localTestExecution
+                        actions: [.localTestExecution],
+                        nonExecutedStatus: .notRunByUserDecision
                     )
                 ]
             )
@@ -522,6 +619,37 @@ struct EvidenceContractTests {
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.TEST_COUNT_GATE_MISMATCH"))
     }
 
+    @Test("All-skipped test counts require a blocked gate")
+    func allSkippedTestCountsRejectPass() {
+        let counts = EvidenceTestCounts(total: 1, passed: 0, failed: 0, skipped: 1)
+        let evidence = validEvidence(testCounts: counts)
+
+        let result = EvidenceVerifier.verify(
+            evidence,
+            expected: expectation(testCounts: counts, testGateID: "QC.STATIC")
+        )
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.TEST_COUNT_GATE_MISMATCH"))
+    }
+
+    @Test("Oversized top-level collections stop before deeper scans")
+    func collectionLimitReturnsBeforeDuplicateScan() {
+        let commands = (0...256).map { _ in
+            EvidenceCommand(
+                id: "duplicate",
+                commandLine: ["true"],
+                exitCode: 0
+            )
+        }
+        let evidence = validEvidence(commands: commands)
+
+        let result = EvidenceVerifier.verify(evidence, expected: expectation())
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code) == ["QC.EVIDENCE.COLLECTION_LIMIT"])
+    }
+
     @Test("PASS evidence requires a zero command exit code")
     func passWithNonzeroExitIsBypassed() {
         let evidence = validEvidence(
@@ -556,7 +684,9 @@ struct EvidenceContractTests {
         let result = EvidenceVerifier.verify(
             evidence,
             expected: expectation(
-                gates: ["QC.TESTS": EvidenceGateExpectation()]
+                gates: [
+                    "QC.TESTS": EvidenceGateExpectation(nonExecutedStatus: .skipped)
+                ]
             )
         )
 
@@ -574,6 +704,40 @@ struct EvidenceContractTests {
         #expect(decoded.sourceRevision == sourceRevision)
         #expect(decoded.gates.map(\.status) == [.pass])
         #expect(decoded.claimedVerdict == .ready)
+    }
+
+    @Test("Schema relative paths match runtime segment rules")
+    func schemaRejectsUnsafeRelativePaths() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let schemaURL = repositoryRoot.appendingPathComponent(
+            "schemas/quality-evidence.schema.json"
+        )
+        let schema = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: schemaURL))
+                as? [String: Any]
+        )
+        let definitions = try #require(schema["$defs"] as? [String: Any])
+        let relativePath = try #require(definitions["relativePath"] as? [String: Any])
+        let clauses = try #require(relativePath["allOf"] as? [[String: Any]])
+        let patterns = clauses.compactMap { clause in
+            (clause["not"] as? [String: Any])?["pattern"] as? String
+        }
+
+        func isRejected(_ path: String) throws -> Bool {
+            let range = NSRange(path.startIndex..<path.endIndex, in: path)
+            return try patterns.contains { pattern in
+                try NSRegularExpression(pattern: pattern)
+                    .firstMatch(in: path, range: range) != nil
+            }
+        }
+
+        for path in [".", "reports//result.json", "reports/"] {
+            #expect(try isRejected(path))
+        }
+        #expect(try !isRejected("reports/result.json"))
     }
 
     private func validEvidence(
