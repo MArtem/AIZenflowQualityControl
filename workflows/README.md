@@ -1,9 +1,11 @@
 # Manual Workflows
 
-The repository provides one manually triggered, advisory GitHub workflow:
+The repository provides two manually triggered, advisory GitHub workflows:
 
 - `.github/workflows/manual-static.yml` — self-checks the quality-control repository without
   running tests, application builds, Simulator/device work, paid services, or Codex Review.
+- `.github/workflows/manual-failing-canary.yml` — proves that the committed deliberate-failure
+  fixture produces a verified red GitHub run instead of normal `PASS`.
 
 ## Run The Static Check
 
@@ -36,3 +38,22 @@ application-runtime, accessibility, performance, security, or production-readine
 Future workflows must use pinned dependencies, least privilege, bounded artifacts, exact-source
 evidence, standard included runners, zero additional monetary cost, and no paid AI API calls. They
 must not make branch protection or CI mandatory without a separate user decision.
+
+## Run The Failing Canary
+
+1. Open **Actions** and select **Manual Failing Canary**.
+2. Select **Run workflow** and choose the exact branch or ref to verify.
+3. Open the completed run and confirm that it is red by design.
+4. Open the step summary and require `EXPECTED_FAIL_VERIFIED`, the selected source SHA,
+   `QC.STATIC.FORBIDDEN_ARTIFACT`, and
+   `Sources/DeliberateFailure.canary-fail`.
+
+The canary captures exit `1` and validates the structured report before deliberately returning
+exit `1` to GitHub. Any other command exit, status, finding set, path, or normal `QC.STATIC.SCAN`
+result fails before the verified marker is written. The workflow remains manual-only, uses a
+five-minute standard public runner ceiling, uploads no artifact, persists no checkout credential,
+and calls no paid service or AI API.
+
+The red conclusion is expected only for this explicitly named canary workflow. It is not a product
+incident, merge gate, or versioned evidence record. The normal **Manual Static Quality Check** must
+remain green on the same source SHA.
