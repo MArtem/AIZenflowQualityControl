@@ -1,0 +1,128 @@
+name: Manual Failing Canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-failing-canary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deliberate-failure:
+    name: Expected Failure
+    runs-on: macos-15
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out the selected revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record source and toolchain context
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Manual Failing Canary"
+            echo
+            echo "- Source SHA: \`$(git rev-parse HEAD)\`"
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- Runner: \`${RUNNER_OS} ${RUNNER_ARCH}\`"
+            echo
+            echo '```text'
+            swift --version
+            xcodebuild -version
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Prove the deliberate fixture fails closed
+        shell: bash
+        env:
+          QC_PROFILE_PATH: ${{ runner.temp }}/failing-canary-profile.json
+          QC_REPORT_PATH: ${{ runner.temp }}/failing-canary-report.json
+          QC_SANDBOX_ROOT: ${{ runner.temp }}/failing-canary-sandbox
+        run: |
+          set -euo pipefail
+          mkdir -p "${QC_SANDBOX_ROOT}/cache"
+          python3 - <<'PY'
+          import json
+          import os
+
+          profile = {
+              "schemaVersion": 1,
+              "project": {"kind": "xcodeproj", "path": "FailingCanary.xcodeproj"},
+              "scheme": "FailingCanary",
+              "sourcePaths": ["Sources"],
+              "mode": "controlled",
+              "permissions": {
+                  "testCreation": "deny",
+                  "testModification": "deny",
+                  "localTestExecution": "deny",
+                  "githubExecution": "manual",
+                  "uiTests": "deny",
+                  "simulatorOrDevice": "deny",
+                  "performanceOrInstruments": "deny",
+              },
+              "sandbox": {
+                  "root": os.environ["QC_SANDBOX_ROOT"],
+                  "cache": os.path.join(os.environ["QC_SANDBOX_ROOT"], "cache"),
+              },
+          }
+          with open(os.environ["QC_PROFILE_PATH"], "w", encoding="utf-8") as output:
+              json.dump(profile, output, sort_keys=True)
+          PY
+
+          set +e
+          swift run \
+            --scratch-path "${RUNNER_TEMP}/failing-canary-swift-scratch" \
+            -Xswiftc -warnings-as-errors \
+            quality static \
+            --profile "${QC_PROFILE_PATH}" \
+            --policy fixtures/policies/deliberate-failure-static-policy.json \
+            --repository-root fixtures/static/failing-project \
+            > "${QC_REPORT_PATH}"
+          command_status=$?
+          set -e
+
+          if [[ "${command_status}" -ne 1 ]]; then
+            echo "Expected quality static to exit 1, got ${command_status}." >&2
+            exit 2
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          expected_path = "Sources/DeliberateFailure.canary-fail"
+          with open(os.environ["QC_REPORT_PATH"], encoding="utf-8") as source:
+              report = json.load(source)
+
+          if report.get("status") != "FAIL":
+              raise SystemExit("Deliberate fixture did not report FAIL")
+
+          findings = [
+              check.get("path")
+              for check in report.get("checks", [])
+              if check.get("id") == "QC.STATIC.FORBIDDEN_ARTIFACT"
+          ]
+          if findings != [expected_path]:
+              raise SystemExit(f"Unexpected forbidden-artifact findings: {findings!r}")
+
+          if any(check.get("id") == "QC.STATIC.SCAN" for check in report.get("checks", [])):
+              raise SystemExit("Deliberate failing fixture produced a normal scan result")
+          PY
+
+          {
+            echo
+            echo "- Result: \`EXPECTED_FAIL_VERIFIED\`"
+            echo "- Expected finding: \`QC.STATIC.FORBIDDEN_ARTIFACT\`"
+            echo "- Expected path: \`Sources/DeliberateFailure.canary-fail\`"
+            echo "- Expected GitHub conclusion: \`failure\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          exit 1
