@@ -3,15 +3,18 @@
 This directory owns unit, integration, fixture, and adversarial tests of the quality-control
 engine. Tests use Swift Testing and remain isolated from application test targets.
 
-Stage 6A starts with bounded public-contract verification for report aggregation and profile input
-handling. It asserts that empty evidence is `BLOCKED`, `FAIL` and `BLOCKED` take precedence over
-`PASS`, and malformed, unknown, duplicate, or oversized profile documents cannot produce normal
-`PASS`. A valid closed profile is retained as the positive control.
+The verifier suite covers result aggregation, malformed and bounded profile/policy inputs,
+path/symlink boundaries, scan ceilings and cooperative timeouts, immutable policy floors, committed
+passing/failing fixtures, independent permission decisions, and versioned evidence verification.
+Evidence cases prove that stale source/review SHAs, changed permission snapshots, forged command or
+artifact sets, missing trusted user authorization, prohibited execution, nonzero `PASS` commands,
+skipped gates, and false claimed verdicts cannot produce normal `READY`.
 
 Test creation, modification, and execution remain separately user-controlled. Temporary test
 inputs and SwiftPM scratch output must stay under `.quality-control-cache/` inside the repository.
 
-After explicit local-execution permission, run the following from the repository root:
+After explicit local-execution permission, run the following from the repository root. The Stage
+7/9A contained run on 2026-07-30 passed 40 tests in four suites with warnings treated as errors:
 
 ```bash
 QC_SWIFT_TEST_ROOT="${PWD}/.quality-control-cache/swift-tests"

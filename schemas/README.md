@@ -12,3 +12,10 @@ bytes, require regular-file inputs read through EOF, reject duplicate object key
 decoding, and cap JSON nesting at 64 containers. Project profile schema version 1 allows at most
 256 non-overlapping explicit source paths, validation output is capped at 256 issues, and each
 static-policy directory/suffix list is capped at 256 unique entries.
+
+`quality-evidence.schema.json` defines evidence schema version 1. It is a closed, bounded contract
+for exact source/engine/profile identity, toolchain and permissions, executed commands, explicit
+gate statuses, optional test counts and review SHA, artifact hashes, residual risks, and the claimed
+advisory verdict. Runtime verification additionally requires trusted out-of-band expectations for
+the complete command set, complete gate set, user-authorized actions, and artifact hashes. The
+schema is not yet wired to a CLI evidence loader or producer.

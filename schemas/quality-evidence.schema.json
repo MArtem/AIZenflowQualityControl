@@ -1,0 +1,306 @@
+{
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/quality-evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "claimedVerdict": {
+      "$ref": "#/$defs/advisoryVerdict"
+    },
+    "commands": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/permissionAction"
+          },
+          "authorization": {
+            "enum": [
+              "NOT_REQUIRED",
+              "PROFILE",
+              "USER"
+            ]
+          },
+          "commandLine": {
+            "items": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "exitCode": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "required": [
+          "id",
+          "commandLine",
+          "authorization"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "engineRevision": {
+      "$ref": "#/$defs/gitRevision"
+    },
+    "engineVersion": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "gates": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/permissionAction"
+          },
+          "commandID": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "message": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "status": {
+            "$ref": "#/$defs/gateStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "permissions": {
+      "$ref": "#/$defs/permissionPolicy"
+    },
+    "profileSHA256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profileSchemaVersion": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "residualRisks": {
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "reviewRevision": {
+      "$ref": "#/$defs/gitRevision"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceRepository": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "sourceRevision": {
+      "$ref": "#/$defs/gitRevision"
+    },
+    "testCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "failed": {
+          "$ref": "#/$defs/count"
+        },
+        "passed": {
+          "$ref": "#/$defs/count"
+        },
+        "skipped": {
+          "$ref": "#/$defs/count"
+        },
+        "total": {
+          "$ref": "#/$defs/count"
+        }
+      },
+      "required": [
+        "total",
+        "passed",
+        "failed",
+        "skipped"
+      ],
+      "type": "object"
+    },
+    "toolchain": {
+      "additionalProperties": false,
+      "properties": {
+        "swiftVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "xcodeVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "swiftVersion",
+        "xcodeVersion"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "sourceRepository",
+    "sourceRevision",
+    "engineVersion",
+    "engineRevision",
+    "profileSchemaVersion",
+    "profileSHA256",
+    "toolchain",
+    "permissions",
+    "commands",
+    "gates",
+    "artifacts",
+    "residualRisks",
+    "claimedVerdict"
+  ],
+  "title": "AIZenflow Quality Control Evidence",
+  "type": "object",
+  "$defs": {
+    "advisoryVerdict": {
+      "enum": [
+        "READY",
+        "READY_WITH_ACCEPTED_RISK",
+        "NEEDS_OWNER_DECISION",
+        "NOT_READY",
+        "BLOCKED",
+        "BYPASSED"
+      ]
+    },
+    "count": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "gateStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "BLOCKED",
+        "NOT_APPLICABLE",
+        "NOT_RUN_BY_USER_DECISION",
+        "SKIPPED"
+      ]
+    },
+    "gitRevision": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "nonEmptyString": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "permissionAction": {
+      "enum": [
+        "testCreation",
+        "testModification",
+        "localTestExecution",
+        "githubExecution",
+        "uiTests",
+        "simulatorOrDevice",
+        "performanceOrInstruments"
+      ]
+    },
+    "permissionDecision": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "permissionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "githubExecution": {
+          "enum": [
+            "off",
+            "manual"
+          ]
+        },
+        "localTestExecution": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "performanceOrInstruments": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "simulatorOrDevice": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "testCreation": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "testModification": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "uiTests": {
+          "$ref": "#/$defs/permissionDecision"
+        }
+      },
+      "required": [
+        "testCreation",
+        "testModification",
+        "localTestExecution",
+        "githubExecution",
+        "uiTests",
+        "simulatorOrDevice",
+        "performanceOrInstruments"
+      ],
+      "type": "object"
+    },
+    "relativePath": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        {
+          "not": {
+            "pattern": "^(?:/|~)|(?:^|/)\\.\\.(?:/|$)"
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  }
+}

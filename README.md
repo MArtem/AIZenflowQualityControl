@@ -6,13 +6,24 @@ manual workflow definitions.
 
 ## Current Status
 
-Stage 5 is complete at its approved scope, and Stage 6A adds the first bounded verifier contract
-suite. The user-owned Swift build, focused command matrix, and contained package test run passed on
-2026-07-29. The repository now contains one manually triggered, advisory static self-check workflow
-and Swift Testing coverage for result aggregation and profile validation. It still contains no
-automatic push/PR workflow, hook, application profile, or application integration. Current command
-reports, test results, and the static workflow summary are bounded diagnostics, not the versioned
-evidence model planned for a later stage.
+Stages 0–5 and the bounded Stage 6 verifier blocks through the public failing canary are complete.
+The repository now also contains the Stage 7 permission evaluator and the Stage 9A versioned
+evidence contract foundation. The engine can distinguish profile authorization, explicit user
+authorization, and prohibited actions independently for test creation, test modification, local
+test execution, manual GitHub execution, UI tests, Simulator/device work, and performance work.
+
+Evidence schema version 1 represents exact source/engine/profile identity, toolchain, permission
+snapshot, command lines, gate results, test counts, review revision, artifact hashes, residual risk,
+and an advisory verdict. Verification compares untrusted evidence with caller-supplied trusted
+expectations and returns `BYPASSED` for stale identity, changed permissions, missing/extra commands
+or gates, forged artifact sets, stale review SHA, invalid authorization, or a false claimed verdict.
+
+The repository still contains no automatic push/PR workflow, hook, application profile, or
+application integration. Stage 9A does not add an evidence CLI/loader, cryptographic attestation,
+artifact hashing, or workflow evidence producer; those execution-boundary integrations remain
+separate work and no current diagnostic is promoted to authoritative release proof.
+Stage 6 also still requires a hard process timeout for already blocked work and buildable Xcode
+fixtures; neither is claimed by this contract-only slice.
 
 ## Authority Boundary
 
@@ -69,6 +80,20 @@ swift run quality static --profile <profile.json> --policy <policy.json> --repos
 
 Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
 unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.
+
+## Permission And Evidence Contracts
+
+- `PermissionEvaluator` maps every independent permission-controlled action to
+  `AUTHORIZED_BY_PROFILE`, `USER_AUTHORIZATION_REQUIRED`, or `PROHIBITED`.
+- User authorization is trusted only when supplied out of band in `EvidenceExpectation`; a
+  self-asserted `USER` value inside evidence is insufficient.
+- Expected command lines, gate identifiers, source and engine revisions, profile/toolchain facts,
+  permission snapshot, and artifact hashes are supplied by the verifier caller rather than copied
+  from the evidence under review.
+- `SKIPPED` aggregates to `BLOCKED`, `NOT_RUN_BY_USER_DECISION` to `NEEDS_OWNER_DECISION`, and a
+  claimed verdict inconsistent with the gate set becomes `BYPASSED`.
+- `READY_WITH_ACCEPTED_RISK` is represented but is not automatically derived; ownership and
+  exception governance remain future stages.
 
 The neutral fixtures under `fixtures/profiles/` demonstrate a structurally valid profile and a
 deliberately invalid traversal/cache-boundary profile. They are not a test suite.
