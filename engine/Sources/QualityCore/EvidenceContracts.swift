@@ -217,13 +217,16 @@ public struct QualityEvidence: Codable, Sendable {
 
 public struct EvidenceCommandExpectation: Equatable, Sendable {
     public let commandLine: [String]
+    public let exitCode: Int
     public let actions: Set<PermissionAction>
 
     public init(
         commandLine: [String],
+        exitCode: Int,
         actions: Set<PermissionAction> = []
     ) {
         self.commandLine = commandLine
+        self.exitCode = exitCode
         self.actions = actions
     }
 }
@@ -470,6 +473,7 @@ public enum EvidenceVerifier {
                     commands.contains {
                         $0.id == id
                             && $0.commandLine == expectation.commandLine
+                            && $0.exitCode == expectation.exitCode
                             && Set($0.actions) == expectation.actions
                             && Set($0.actions).count == $0.actions.count
                     }
@@ -559,6 +563,12 @@ public enum EvidenceVerifier {
             &issues
         )
         let commandIDs = Set(commands.map(\.id))
+        let referencedCommandIDs = Set(gates.compactMap(\.commandID))
+        require(
+            commandIDs == referencedCommandIDs,
+            "QC.EVIDENCE.UNACCOUNTED_COMMAND",
+            &issues
+        )
 
         for gate in gates {
             require(
@@ -816,7 +826,7 @@ public enum EvidenceVerifier {
     }
 
     private static func isBoundedNonEmptyString(_ value: String) -> Bool {
-        value.utf8.count <= 4_096
+        value.unicodeScalars.count <= 4_096
             && value.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
     }
 

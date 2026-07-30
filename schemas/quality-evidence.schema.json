@@ -133,7 +133,8 @@
         "$ref": "#/$defs/nonEmptyString"
       },
       "maxItems": 256,
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "reviewRevision": {
       "$ref": "#/$defs/gitRevision"

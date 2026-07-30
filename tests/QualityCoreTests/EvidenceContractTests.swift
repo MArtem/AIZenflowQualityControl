@@ -156,6 +156,7 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
+                        exitCode: 0,
                         actions: [.testModification]
                     )
                 ],
@@ -203,6 +204,7 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
+                        exitCode: 0,
                         actions: [.localTestExecution]
                     )
                 ],
@@ -250,6 +252,7 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
+                        exitCode: 0,
                         actions: [.localTestExecution]
                     )
                 ],
@@ -300,6 +303,7 @@ struct EvidenceContractTests {
             commands: [
                 "ui-tests": EvidenceCommandExpectation(
                     commandLine: ["xcodebuild", "test"],
+                    exitCode: 0,
                     actions: Set(actions)
                 )
             ],
@@ -349,6 +353,7 @@ struct EvidenceContractTests {
                 commands: [
                     "tests": EvidenceCommandExpectation(
                         commandLine: ["swift", "test"],
+                        exitCode: 0,
                         actions: [.localTestExecution]
                     )
                 ],
@@ -372,7 +377,28 @@ struct EvidenceContractTests {
             validEvidence(),
             expected: expectation(
                 commands: [
-                    "static": EvidenceCommandExpectation(commandLine: ["true"])
+                    "static": EvidenceCommandExpectation(
+                        commandLine: ["true"],
+                        exitCode: 0
+                    )
+                ]
+            )
+        )
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.COMMAND_SET_MISMATCH"))
+    }
+
+    @Test("A forged command outcome is BYPASSED")
+    func forgedCommandExitCodeIsBypassed() {
+        let result = EvidenceVerifier.verify(
+            validEvidence(),
+            expected: expectation(
+                commands: [
+                    "static": EvidenceCommandExpectation(
+                        commandLine: ["swift", "run", "quality", "static"],
+                        exitCode: 1
+                    )
                 ]
             )
         )
@@ -405,6 +431,7 @@ struct EvidenceContractTests {
             commands: [
                 "tests": EvidenceCommandExpectation(
                     commandLine: ["swift", "test"],
+                    exitCode: 0,
                     actions: [.localTestExecution]
                 )
             ],
@@ -459,9 +486,13 @@ struct EvidenceContractTests {
         )
         let expected = expectation(
             commands: [
-                "static": EvidenceCommandExpectation(commandLine: ["quality", "static"]),
+                "static": EvidenceCommandExpectation(
+                    commandLine: ["quality", "static"],
+                    exitCode: 0
+                ),
                 "tests": EvidenceCommandExpectation(
                     commandLine: ["swift", "test"],
+                    exitCode: 0,
                     actions: [.localTestExecution]
                 )
             ],
@@ -480,6 +511,54 @@ struct EvidenceContractTests {
 
         #expect(result.verdict == .bypassed)
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
+    }
+
+    @Test("Every command must be accounted for by a gate")
+    func unaccountedFailedCommandIsBypassed() {
+        let evidence = validEvidence(
+            commands: [
+                EvidenceCommand(
+                    id: "static",
+                    commandLine: ["quality", "static"],
+                    exitCode: 0
+                ),
+                EvidenceCommand(
+                    id: "auxiliary",
+                    commandLine: ["quality", "auxiliary"],
+                    exitCode: 1
+                )
+            ],
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: "Static passed.",
+                    commandID: "static"
+                )
+            ],
+            artifacts: []
+        )
+        let expected = expectation(
+            commands: [
+                "static": EvidenceCommandExpectation(
+                    commandLine: ["quality", "static"],
+                    exitCode: 0
+                ),
+                "auxiliary": EvidenceCommandExpectation(
+                    commandLine: ["quality", "auxiliary"],
+                    exitCode: 1
+                )
+            ],
+            gates: [
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static")
+            ],
+            artifacts: [:]
+        )
+
+        let result = EvidenceVerifier.verify(evidence, expected: expected)
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.UNACCOUNTED_COMMAND"))
     }
 
     @Test("Every command requires a terminal exit code")
@@ -706,6 +785,38 @@ struct EvidenceContractTests {
         #expect(decoded.claimedVerdict == .ready)
     }
 
+    @Test("Runtime string limits use schema Unicode-length units")
+    func unicodeStringBoundsMatchSchema() {
+        let accepted = validEvidence(
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: String(repeating: "é", count: 4_096),
+                    commandID: "static"
+                )
+            ]
+        )
+        let rejected = validEvidence(
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: String(repeating: "é", count: 4_097),
+                    commandID: "static"
+                )
+            ]
+        )
+
+        let acceptedResult = EvidenceVerifier.verify(accepted, expected: expectation())
+        let rejectedResult = EvidenceVerifier.verify(rejected, expected: expectation())
+
+        #expect(acceptedResult.verdict == .ready)
+        #expect(acceptedResult.issues.isEmpty)
+        #expect(rejectedResult.verdict == .bypassed)
+        #expect(rejectedResult.issues.map(\.code) == ["QC.EVIDENCE.STRING_LIMIT"])
+    }
+
     @Test("Schema relative paths match runtime segment rules")
     func schemaRejectsUnsafeRelativePaths() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
@@ -720,6 +831,12 @@ struct EvidenceContractTests {
                 as? [String: Any]
         )
         let definitions = try #require(schema["$defs"] as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let residualRisks = try #require(properties["residualRisks"] as? [String: Any])
+        let nonEmptyString = try #require(definitions["nonEmptyString"] as? [String: Any])
+        #expect(residualRisks["uniqueItems"] as? Bool == true)
+        #expect(nonEmptyString["maxLength"] as? Int == 4_096)
+
         let relativePath = try #require(definitions["relativePath"] as? [String: Any])
         let clauses = try #require(relativePath["allOf"] as? [[String: Any]])
         let patterns = clauses.compactMap { clause in
@@ -804,7 +921,8 @@ struct EvidenceContractTests {
             permissions: policy,
             commandsByID: commands ?? [
                 "static": EvidenceCommandExpectation(
-                    commandLine: ["swift", "run", "quality", "static"]
+                    commandLine: ["swift", "run", "quality", "static"],
+                    exitCode: 0
                 )
             ],
             gatesByID: gates ?? [

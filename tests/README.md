@@ -7,20 +7,21 @@ The verifier suite covers result aggregation, malformed and bounded profile/poli
 path/symlink boundaries, scan ceilings and cooperative timeouts, immutable policy floors, committed
 passing/failing fixtures, independent permission decisions, and versioned evidence verification.
 Evidence cases prove that stale source/review SHAs, changed permission snapshots, forged command or
-artifact sets, incomplete multi-action authorization, missing terminal outcomes, upgraded
-non-executed statuses, missing trusted user authorization, prohibited execution, nonzero `PASS`
-commands, all-skipped counts, skipped gates, and false claimed verdicts cannot produce normal
-`READY`. Collection-limit regressions also prove that oversized evidence returns before deeper
-duplicate scans.
+artifact sets, incomplete multi-action authorization, missing or forged terminal outcomes,
+unaccounted commands, upgraded non-executed statuses, missing trusted user authorization,
+prohibited execution, nonzero `PASS` commands, all-skipped counts, skipped gates, and false claimed
+verdicts cannot produce normal `READY`. Collection-limit regressions also prove that oversized
+evidence returns before deeper duplicate scans.
 
 Test creation, modification, and execution remain separately user-controlled. Temporary test
 inputs and SwiftPM scratch output must stay under `.quality-control-cache/` inside the repository.
 
 After explicit local-execution permission, run the following from the repository root. The Stage
-7/9A corrective contained run on 2026-07-30 passed 50 tests in four suites with warnings treated as
-errors. It includes regressions for complete permission-action sets, mandatory terminal outcomes,
-trusted non-executed statuses, early collection-limit returns, schema/runtime path parity,
-all-skipped counts, integer overflow in untrusted counts, and failed-count `READY` claims:
+7/9A corrective contained run on 2026-07-30 passed 53 tests in four suites with warnings treated as
+errors. It includes regressions for complete permission-action sets, trusted terminal outcomes,
+gate accounting for every command, trusted non-executed statuses, early collection-limit returns,
+schema/runtime path and Unicode-length parity, unique residual risks, all-skipped counts, integer
+overflow in untrusted counts, and failed-count `READY` claims:
 
 ```bash
 QC_SWIFT_TEST_ROOT="${PWD}/.quality-control-cache/swift-tests"

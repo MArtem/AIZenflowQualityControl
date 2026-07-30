@@ -20,4 +20,5 @@ advisory verdict. Runtime verification additionally requires trusted out-of-band
 the complete command/action sets, terminal command outcomes, exact gate-to-command bindings,
 trusted non-executed gate statuses, user-authorized actions, test-count gate, and artifact hashes.
 Artifact paths use the same non-empty relative-segment rules in schema and runtime. The schema is
-not yet wired to a CLI evidence loader or producer.
+not yet wired to a CLI evidence loader or producer. Bounded strings use Unicode-scalar length in
+runtime to match JSON Schema code-point length, and residual-risk entries are unique in both layers.
