@@ -105,15 +105,30 @@ jobs:
           if report.get("status") != "FAIL":
               raise SystemExit("Deliberate fixture did not report FAIL")
 
-          findings = [
-              check.get("path")
-              for check in report.get("checks", [])
-              if check.get("id") == "QC.STATIC.FORBIDDEN_ARTIFACT"
-          ]
-          if findings != [expected_path]:
-              raise SystemExit(f"Unexpected forbidden-artifact findings: {findings!r}")
+          checks = report.get("checks")
+          if not isinstance(checks, list):
+              raise SystemExit("Deliberate fixture report has no check collection")
 
-          if any(check.get("id") == "QC.STATIC.SCAN" for check in report.get("checks", [])):
+          non_pass_checks = [
+              {
+                  "id": check.get("id"),
+                  "status": check.get("status"),
+                  "path": check.get("path"),
+              }
+              for check in checks
+              if check.get("status") != "PASS"
+          ]
+          expected_non_pass_checks = [
+              {
+                  "id": "QC.STATIC.FORBIDDEN_ARTIFACT",
+                  "status": "FAIL",
+                  "path": expected_path,
+              }
+          ]
+          if non_pass_checks != expected_non_pass_checks:
+              raise SystemExit(f"Unexpected non-PASS checks: {non_pass_checks!r}")
+
+          if any(check.get("id") == "QC.STATIC.SCAN" for check in checks):
               raise SystemExit("Deliberate failing fixture produced a normal scan result")
           PY
 
