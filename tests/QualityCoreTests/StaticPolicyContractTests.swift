@@ -61,6 +61,34 @@ struct StaticPolicyContractTests {
         #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
     }
 
+    @Test(
+        "Committed static fixtures preserve deliberate PASS and FAIL results",
+        arguments: StaticFixtureContract.allCases
+    )
+    func committedStaticFixturesPreserveResults(_ input: StaticFixtureContract) throws {
+        let profile = try makeScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: input.policyURL,
+            repositoryRoot: input.repositoryURL
+        )
+
+        #expect(report.status.rawValue == input.expectedStatus)
+        #expect(
+            report.checks
+                .filter { $0.id == "QC.STATIC.FORBIDDEN_ARTIFACT" }
+                .compactMap(\.path) == input.expectedForbiddenArtifactPaths
+        )
+        #expect(
+            report.checks.contains {
+                $0.id == "QC.STATIC.SCAN"
+                    && $0.status.rawValue == QualityStatus.pass.rawValue
+            } == input.expectsNormalScanPass
+        )
+    }
+
     @Test("A source scope with no regular files is blocked")
     func emptySourceScopeIsBlocked() throws {
         let profile = try makeScanProfile()
@@ -437,6 +465,62 @@ enum WeakeningStaticPolicyContract: String, CaseIterable, Sendable {
             )
         case .missingRequiredFileSuffix:
             try policyData(forbiddenFileSuffixes: [".xcresult", ".xcarchive"])
+        }
+    }
+}
+
+enum StaticFixtureContract: String, CaseIterable, Sendable {
+    case passing
+    case deliberateFailureWithCanonicalPolicy
+    case deliberateFailure
+
+    var repositoryURL: URL {
+        packageRootURL.appendingPathComponent(
+            repositoryRelativePath,
+            isDirectory: true
+        )
+    }
+
+    var policyURL: URL {
+        switch self {
+        case .passing, .deliberateFailureWithCanonicalPolicy:
+            defaultStaticPolicyURL
+        case .deliberateFailure:
+            packageRootURL.appendingPathComponent(
+                "fixtures/policies/deliberate-failure-static-policy.json",
+                isDirectory: false
+            )
+        }
+    }
+
+    var expectedStatus: String {
+        switch self {
+        case .passing, .deliberateFailureWithCanonicalPolicy:
+            QualityStatus.pass.rawValue
+        case .deliberateFailure:
+            QualityStatus.fail.rawValue
+        }
+    }
+
+    var expectedForbiddenArtifactPaths: [String] {
+        switch self {
+        case .passing, .deliberateFailureWithCanonicalPolicy:
+            []
+        case .deliberateFailure:
+            ["Sources/DeliberateFailure.canary-fail"]
+        }
+    }
+
+    var expectsNormalScanPass: Bool {
+        self != .deliberateFailure
+    }
+
+    private var repositoryRelativePath: String {
+        switch self {
+        case .passing:
+            "fixtures/static/passing-project"
+        case .deliberateFailureWithCanonicalPolicy, .deliberateFailure:
+            "fixtures/static/failing-project"
         }
     }
 }

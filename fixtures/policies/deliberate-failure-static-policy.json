@@ -1,0 +1,15 @@
+{
+  "excludedDirectoryNames": [
+    ".git",
+    ".build",
+    "DerivedData"
+  ],
+  "forbiddenFileSuffixes": [
+    ".xcresult",
+    ".xcarchive",
+    ".ipa",
+    ".canary-fail"
+  ],
+  "maximumFileBytes": 5000000,
+  "schemaVersion": 1
+}
