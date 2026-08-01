@@ -20,24 +20,24 @@ public struct ProjectReference: Codable, Sendable {
     public let path: String
 }
 
-public enum ProjectMode: String, Codable, Sendable {
+public enum ProjectMode: String, Codable, Equatable, Sendable {
     case prototype
     case controlled
     case production
 }
 
-public enum PermissionDecision: String, Codable, Sendable {
+public enum PermissionDecision: String, Codable, Equatable, Sendable {
     case allow
     case deny
     case ask
 }
 
-public enum GitHubExecutionMode: String, Codable, Sendable {
+public enum GitHubExecutionMode: String, Codable, Equatable, Sendable {
     case off
     case manual
 }
 
-public struct PermissionPolicy: Codable, Sendable {
+public struct PermissionPolicy: Codable, Equatable, Sendable {
     public let testCreation: PermissionDecision
     public let testModification: PermissionDecision
     public let localTestExecution: PermissionDecision
@@ -45,6 +45,24 @@ public struct PermissionPolicy: Codable, Sendable {
     public let uiTests: PermissionDecision
     public let simulatorOrDevice: PermissionDecision
     public let performanceOrInstruments: PermissionDecision
+
+    public init(
+        testCreation: PermissionDecision,
+        testModification: PermissionDecision,
+        localTestExecution: PermissionDecision,
+        githubExecution: GitHubExecutionMode,
+        uiTests: PermissionDecision,
+        simulatorOrDevice: PermissionDecision,
+        performanceOrInstruments: PermissionDecision
+    ) {
+        self.testCreation = testCreation
+        self.testModification = testModification
+        self.localTestExecution = localTestExecution
+        self.githubExecution = githubExecution
+        self.uiTests = uiTests
+        self.simulatorOrDevice = simulatorOrDevice
+        self.performanceOrInstruments = performanceOrInstruments
+    }
 }
 
 public struct SandboxPaths: Codable, Sendable {

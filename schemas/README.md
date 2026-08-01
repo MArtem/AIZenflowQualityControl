@@ -12,3 +12,24 @@ bytes, require regular-file inputs read through EOF, reject duplicate object key
 decoding, and cap JSON nesting at 64 containers. Project profile schema version 1 allows at most
 256 non-overlapping explicit source paths, validation output is capped at 256 issues, and each
 static-policy directory/suffix list is capped at 256 unique entries.
+
+`quality-evidence.schema.json` defines evidence schema version 1. It is a closed, bounded contract
+for exact source/engine/profile identity, toolchain and permissions, SHA-256 command identities,
+explicit gate statuses, optional test counts and review SHA, artifact hashes, residual risks, and
+the claimed advisory verdict. Raw command arguments are excluded from the evidence model. Runtime
+verification additionally requires trusted out-of-band expectations for the complete
+command/action sets, terminal command outcomes, exact gate-to-command bindings, trusted status and
+message for every gate, user-authorized actions, test-count gate, and artifact hashes.
+The schema requires `commandID` for `PASS`/`FAIL` and forbids it for explicit non-executed states.
+Actionless commands require `NOT_REQUIRED`; commands with controlled actions require `PROFILE` or
+`USER`. An empty command set is valid only when runtime gate accounting finds no command reference,
+so pre-execution blocked or user-declined outcomes remain representable. Command, gate, and artifact
+arrays reject identical duplicate objects in the schema; runtime verification additionally enforces
+unique IDs or paths when entries differ. Artifact paths use the same non-empty relative-segment
+rules in schema and runtime. The schema is not yet wired to a CLI evidence producer. Public
+`EvidenceLoader` provides the only full-document decode path and rejects oversized input,
+duplicate object keys, unknown object properties, and explicit null optionals. `QualityEvidence`
+remains encode-only. Evidence documents are capped at 8 MiB, top-level collections at 64 entries,
+and bounded strings at 1,024 Unicode scalars. Runtime and schema share an explicit stable whitespace
+set, including U+200B, and the schema's conservative worst-case escaped-string budget remains below
+the loader cap. Residual-risk entries are unique in both layers.

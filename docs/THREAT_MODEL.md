@@ -36,7 +36,7 @@ artifacts, and uploaded evidence are untrusted until validated for their exact s
 | Project-specific assumptions entering reusable defaults | Validate explicit profiles; prohibit app names, schemes, destinations, test paths, and user paths in defaults |
 | Permission bypass for test writing or execution | Model permissions independently and require explicit authorization at the execution boundary |
 | Malicious repository paths, symlinks, or command arguments | Canonicalize and bound paths; avoid shell interpolation; test traversal and injection cases |
-| Secret or private-data leakage through logs/artifacts | Redact values, minimize retention, bound collection, and never upload source or secrets as telemetry |
+| Secret or private-data leakage through logs/artifacts | Exclude raw command argv from evidence, bind commands by SHA-256 identity, redact other values, minimize retention, bound collection, and never upload source or secrets as telemetry |
 | Dependency or workflow supply-chain compromise | Pin dependencies and Actions, use least privilege, verify artifacts, and avoid unreviewed `latest` inputs |
 | Bootstrap overwriting project files | Inventory, dry-run, conflict report, explicit apply, post-check, and reversible rollback |
 | Weakening policy through local flags or exceptions | Separate project facts from immutable engine floors; make exceptions exact, owned, expiring, and visible |

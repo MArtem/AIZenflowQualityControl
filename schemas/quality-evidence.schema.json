@@ -1,0 +1,428 @@
+{
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/quality-evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "claimedVerdict": {
+      "$ref": "#/$defs/advisoryVerdict"
+    },
+    "commands": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "maxItems": 0
+                }
+              },
+              "required": [
+                "actions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "authorization": {
+                  "const": "NOT_REQUIRED"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "actions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "authorization": {
+                  "enum": [
+                    "PROFILE",
+                    "USER"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/permissionAction"
+            },
+            "maxItems": 7,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "authorization": {
+            "enum": [
+              "NOT_REQUIRED",
+              "PROFILE",
+              "USER"
+            ]
+          },
+          "commandSHA256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "exitCode": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "required": [
+          "id",
+          "commandSHA256",
+          "exitCode",
+          "actions",
+          "authorization"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "engineRevision": {
+      "$ref": "#/$defs/gitRevision"
+    },
+    "engineVersion": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "gates": {
+      "items": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "PASS",
+                    "FAIL"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "commandID"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "NOT_APPLICABLE",
+                    "NOT_RUN_BY_USER_DECISION",
+                    "SKIPPED"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "commandID"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "NOT_RUN_BY_USER_DECISION"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/permissionAction"
+            },
+            "maxItems": 7,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "commandID": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "id": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "message": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "status": {
+            "$ref": "#/$defs/gateStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message",
+          "actions"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "permissions": {
+      "$ref": "#/$defs/permissionPolicy"
+    },
+    "profileSHA256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profileSchemaVersion": {
+      "const": 1
+    },
+    "residualRisks": {
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      },
+      "maxItems": 64,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "reviewRevision": {
+      "$ref": "#/$defs/gitRevision"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceRepository": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "sourceRevision": {
+      "$ref": "#/$defs/gitRevision"
+    },
+    "testCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "failed": {
+          "$ref": "#/$defs/count"
+        },
+        "passed": {
+          "$ref": "#/$defs/count"
+        },
+        "skipped": {
+          "$ref": "#/$defs/count"
+        },
+        "total": {
+          "$ref": "#/$defs/count"
+        }
+      },
+      "required": [
+        "total",
+        "passed",
+        "failed",
+        "skipped"
+      ],
+      "type": "object"
+    },
+    "toolchain": {
+      "additionalProperties": false,
+      "properties": {
+        "swiftVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "xcodeVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "swiftVersion",
+        "xcodeVersion"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "sourceRepository",
+    "sourceRevision",
+    "engineVersion",
+    "engineRevision",
+    "profileSchemaVersion",
+    "profileSHA256",
+    "toolchain",
+    "permissions",
+    "commands",
+    "gates",
+    "artifacts",
+    "residualRisks",
+    "claimedVerdict"
+  ],
+  "title": "AIZenflow Quality Control Evidence",
+  "type": "object",
+  "$defs": {
+    "advisoryVerdict": {
+      "enum": [
+        "READY",
+        "READY_WITH_ACCEPTED_RISK",
+        "NEEDS_OWNER_DECISION",
+        "NOT_READY",
+        "BLOCKED",
+        "BYPASSED"
+      ]
+    },
+    "count": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "gateStatus": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "BLOCKED",
+        "NOT_APPLICABLE",
+        "NOT_RUN_BY_USER_DECISION",
+        "SKIPPED"
+      ]
+    },
+    "gitRevision": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "nonEmptyString": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "pattern": "[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200B\\u2028-\\u2029\\u202F\\u205F\\u3000]",
+      "type": "string"
+    },
+    "permissionAction": {
+      "enum": [
+        "testCreation",
+        "testModification",
+        "localTestExecution",
+        "githubExecution",
+        "uiTests",
+        "simulatorOrDevice",
+        "performanceOrInstruments"
+      ]
+    },
+    "permissionDecision": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "permissionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "githubExecution": {
+          "enum": [
+            "off",
+            "manual"
+          ]
+        },
+        "localTestExecution": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "performanceOrInstruments": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "simulatorOrDevice": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "testCreation": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "testModification": {
+          "$ref": "#/$defs/permissionDecision"
+        },
+        "uiTests": {
+          "$ref": "#/$defs/permissionDecision"
+        }
+      },
+      "required": [
+        "testCreation",
+        "testModification",
+        "localTestExecution",
+        "githubExecution",
+        "uiTests",
+        "simulatorOrDevice",
+        "performanceOrInstruments"
+      ],
+      "type": "object"
+    },
+    "relativePath": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        {
+          "not": {
+            "pattern": "^(?:/|~)|(?:^|/)\\.\\.(?:/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.(?:/|$)|//|/$"
+          }
+        }
+      ]
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  }
+}

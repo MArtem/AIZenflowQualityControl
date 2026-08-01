@@ -17,7 +17,13 @@ enum JSONDocumentConstraints {
     static let maximumBytes = 1_000_000
     static let maximumNestingDepth = 64
 
-    static func loadData(from url: URL) throws -> Data {
+    static func loadData(
+        from url: URL,
+        maximumBytes limit: Int = maximumBytes
+    ) throws -> Data {
+        guard limit > 0, limit < Int.max else {
+            throw JSONDocumentLimitError()
+        }
         let descriptor = open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else {
             throw JSONDocumentReadError()
@@ -34,7 +40,7 @@ enum JSONDocumentConstraints {
         var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
 
         while true {
-            let remainingCapacity = maximumBytes + 1 - data.count
+            let remainingCapacity = limit + 1 - data.count
             guard remainingCapacity > 0 else {
                 throw JSONDocumentLimitError()
             }
@@ -55,7 +61,7 @@ enum JSONDocumentConstraints {
             }
 
             data.append(contentsOf: buffer.prefix(Int(readCount)))
-            guard data.count <= maximumBytes else {
+            guard data.count <= limit else {
                 throw JSONDocumentLimitError()
             }
         }
