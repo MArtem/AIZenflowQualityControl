@@ -6,7 +6,8 @@ manual workflow definitions.
 
 ## Current Status
 
-Stages 0–5 and the bounded Stage 6 verifier blocks through the public failing canary are complete.
+Stages 0–5 and the bounded Stage 6 verifier blocks through the public failing canary and hard
+process timeout are complete.
 The repository now also contains the Stage 7 permission evaluator and the Stage 9A versioned
 evidence contract foundation. The engine can distinguish profile authorization, explicit user
 authorization, and prohibited actions independently for test creation, test modification, local
@@ -20,11 +21,13 @@ identity, changed permissions, missing/extra commands or gates, forged artifact 
 SHA, invalid authorization, or a false claimed verdict.
 
 The repository still contains no automatic push/PR workflow, hook, application profile, or
-application integration. Stage 9A does not add an evidence CLI/loader, cryptographic attestation,
+application integration. Stage 9A does not add an evidence CLI command, cryptographic attestation,
 artifact hashing, or workflow evidence producer; those execution-boundary integrations remain
 separate work and no current diagnostic is promoted to authoritative release proof.
-Stage 6 also still requires a hard process timeout for already blocked work and buildable Xcode
-fixtures; neither is claimed by this contract-only slice.
+The public `quality static` command now isolates the cooperative scanner in a child process, applies
+a 245-second hard deadline inside the five-minute workflow ceiling, bounds captured JSON to 8 MiB,
+and validates report/exit consistency before forwarding a result. Buildable Xcode fixtures remain
+separate work and are not claimed by this boundary.
 
 ## Authority Boundary
 

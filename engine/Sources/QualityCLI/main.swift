@@ -69,6 +69,82 @@ private func emit(_ report: QualityReport) -> Never {
     }
 }
 
+private let staticWorkerEnvironmentKey = "AIZENFLOW_QUALITY_INTERNAL_STATIC_WORKER"
+
+private func currentExecutableIsParentProcess() -> Bool {
+    guard let executableURL = Bundle.main.executableURL else {
+        return false
+    }
+
+    var buffer = [CChar](repeating: 0, count: 4_096)
+    let pathLength = proc_pidpath(getppid(), &buffer, UInt32(buffer.count))
+    guard pathLength > 0 else {
+        return false
+    }
+
+    let parentExecutablePath = String(
+        decoding: buffer.prefix(Int(pathLength)).map { UInt8(bitPattern: $0) },
+        as: UTF8.self
+    )
+    let parentExecutableURL = URL(fileURLWithPath: parentExecutablePath)
+        .resolvingSymlinksInPath()
+        .standardizedFileURL
+    return parentExecutableURL == executableURL
+        .resolvingSymlinksInPath()
+        .standardizedFileURL
+}
+
+private func runStaticWorker(
+    profileURL: URL,
+    policyURL: URL,
+    repositoryRoot: URL
+) -> QualityReport {
+    guard let executableURL = Bundle.main.executableURL else {
+        return QualityReport(
+            command: "static",
+            checks: [
+                QualityCheck(
+                    id: "QC.STATIC.WORKER_FAILURE",
+                    status: .blocked,
+                    message: "Static worker executable could not be resolved."
+                )
+            ]
+        )
+    }
+
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = [
+        "__static-worker",
+        "--profile", profileURL.path,
+        "--policy", policyURL.path,
+        "--repository-root", repositoryRoot.path
+    ]
+    var environment = ProcessInfo.processInfo.environment
+    environment[staticWorkerEnvironmentKey] = "1"
+    process.environment = environment
+
+    do {
+        let result = try BoundedProcessRunner.run(
+            process,
+            timeoutSeconds: StaticWorkerBoundary.hardTimeoutSeconds,
+            maximumOutputBytes: StaticWorkerBoundary.maximumOutputBytes
+        )
+        return StaticWorkerBoundary.report(for: result)
+    } catch {
+        return QualityReport(
+            command: "static",
+            checks: [
+                QualityCheck(
+                    id: "QC.STATIC.WORKER_FAILURE",
+                    status: .blocked,
+                    message: "Static worker could not be launched."
+                )
+            ]
+        )
+    }
+}
+
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
     emit(
@@ -103,6 +179,31 @@ do {
         )
 
     case "static":
+        let options = try parseOptions(
+            arguments.dropFirst(2),
+            allowed: ["--profile", "--policy", "--repository-root"]
+        )
+        let profile = try required("--profile", in: options)
+        let policy = try required("--policy", in: options)
+        let repositoryRoot = try required("--repository-root", in: options)
+        emit(
+            runStaticWorker(
+                profileURL: fileURL(profile),
+                policyURL: fileURL(policy),
+                repositoryRoot: fileURL(repositoryRoot)
+            )
+        )
+
+    case "__static-worker":
+        guard ProcessInfo.processInfo.environment[staticWorkerEnvironmentKey] == "1",
+              currentExecutableIsParentProcess() else {
+            emit(
+                QualityCommands.blockedUsage(
+                    command: "static",
+                    message: "The internal static worker cannot be invoked directly."
+                )
+            )
+        }
         let options = try parseOptions(
             arguments.dropFirst(2),
             allowed: ["--profile", "--policy", "--repository-root"]
