@@ -4,8 +4,9 @@ This directory owns unit, integration, fixture, and adversarial tests of the qua
 engine. Tests use Swift Testing and remain isolated from application test targets.
 
 The verifier suite covers result aggregation, malformed and bounded profile/policy inputs,
-path/symlink boundaries, scan ceilings and cooperative timeouts, immutable policy floors, committed
-passing/failing fixtures, independent permission decisions, and versioned evidence verification.
+path/symlink boundaries, scan ceilings, cooperative and hard process timeouts, immutable policy
+floors, committed passing/failing fixtures, independent permission decisions, and versioned
+evidence verification.
 Evidence cases prove that stale source/review SHAs, changed permission snapshots, forged command
 identities or artifact sets, incomplete multi-action authorization, missing or forged terminal outcomes,
 unaccounted commands, upgraded statuses or forged messages, missing trusted user authorization,
