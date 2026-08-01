@@ -122,6 +122,25 @@
                 ]
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "NOT_RUN_BY_USER_DECISION"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "minItems": 1
+                }
+              }
+            }
           }
         ],
         "properties": {
@@ -165,8 +184,7 @@
       "$ref": "#/$defs/sha256"
     },
     "profileSchemaVersion": {
-      "minimum": 1,
-      "type": "integer"
+      "const": 1
     },
     "residualRisks": {
       "items": {

@@ -57,6 +57,17 @@ struct EvidenceContractTests {
         #expect(result.issues.isEmpty)
     }
 
+    @Test("Unsupported profile schema versions are BYPASSED")
+    func unsupportedProfileSchemaVersionIsBypassed() {
+        let result = EvidenceVerifier.verify(
+            validEvidence(profileSchemaVersion: 2),
+            expected: expectation(profileSchemaVersion: 2)
+        )
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.UNSUPPORTED_PROFILE_SCHEMA"))
+    }
+
     @Test(
         "Gate aggregation never turns a non-run state into READY",
         arguments: [
@@ -168,7 +179,8 @@ struct EvidenceContractTests {
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        actions: [.testModification]
+                        actions: [.testModification],
+                        status: .pass
                     )
                 ],
                 artifacts: [:]
@@ -216,7 +228,8 @@ struct EvidenceContractTests {
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        actions: [.localTestExecution]
+                        actions: [.localTestExecution],
+                        status: .pass
                     )
                 ],
                 artifacts: [:]
@@ -264,7 +277,8 @@ struct EvidenceContractTests {
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        actions: [.localTestExecution]
+                        actions: [.localTestExecution],
+                        status: .pass
                     )
                 ],
                 userAuthorizedActions: [.localTestExecution],
@@ -315,7 +329,8 @@ struct EvidenceContractTests {
             gates: [
                 "QC.UI_TESTS": EvidenceGateExpectation(
                     commandID: "ui-tests",
-                    actions: Set(actions)
+                    actions: Set(actions),
+                    status: .pass
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -365,7 +380,8 @@ struct EvidenceContractTests {
                 gates: [
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
-                        actions: [.localTestExecution]
+                        actions: [.localTestExecution],
+                        status: .pass
                     )
                 ],
                 artifacts: [:]
@@ -443,7 +459,8 @@ struct EvidenceContractTests {
             gates: [
                 "QC.TESTS": EvidenceGateExpectation(
                     commandID: "tests",
-                    actions: [.localTestExecution]
+                    actions: [.localTestExecution],
+                    status: .pass
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -502,10 +519,11 @@ struct EvidenceContractTests {
                 )
             ],
             gates: [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass),
                 "QC.TESTS": EvidenceGateExpectation(
                     commandID: "tests",
-                    actions: [.localTestExecution]
+                    actions: [.localTestExecution],
+                    status: .pass
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -555,7 +573,7 @@ struct EvidenceContractTests {
                 )
             ],
             gates: [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static")
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass)
             ],
             artifacts: [:]
         )
@@ -597,15 +615,33 @@ struct EvidenceContractTests {
         )
         let expected = expectation(
             gates: [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass),
                 "QC.UI_TESTS": EvidenceGateExpectation(
                     actions: [.uiTests],
-                    nonExecutedStatus: .skipped
+                    status: .skipped
                 )
             ]
         )
 
         let result = EvidenceVerifier.verify(evidence, expected: expected)
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
+    }
+
+    @Test("An executed gate cannot upgrade its trusted status")
+    func executedGateStatusUpgradeIsBypassed() {
+        let result = EvidenceVerifier.verify(
+            validEvidence(),
+            expected: expectation(
+                gates: [
+                    "QC.STATIC": EvidenceGateExpectation(
+                        commandID: "static",
+                        status: .blocked
+                    )
+                ]
+            )
+        )
 
         #expect(result.verdict == .bypassed)
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
@@ -617,10 +653,10 @@ struct EvidenceContractTests {
             validEvidence(),
             expected: expectation(
                 gates: [
-                    "QC.STATIC": EvidenceGateExpectation(commandID: "static"),
+                    "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass),
                     "QC.TESTS": EvidenceGateExpectation(
                         actions: [.localTestExecution],
-                        nonExecutedStatus: .notRunByUserDecision
+                        status: .notRunByUserDecision
                     )
                 ]
             )
@@ -779,7 +815,7 @@ struct EvidenceContractTests {
             evidence,
             expected: expectation(
                 gates: [
-                    "QC.TESTS": EvidenceGateExpectation(nonExecutedStatus: .skipped)
+                    "QC.TESTS": EvidenceGateExpectation(status: .skipped)
                 ]
             )
         )
@@ -865,7 +901,7 @@ struct EvidenceContractTests {
         let gateCollection = try #require(properties["gates"] as? [String: Any])
         let gateSchema = try #require(gateCollection["items"] as? [String: Any])
         let gateConditions = try #require(gateSchema["allOf"] as? [[String: Any]])
-        #expect(gateConditions.count == 2)
+        #expect(gateConditions.count == 3)
 
         let executedIf = try #require(gateConditions[0]["if"] as? [String: Any])
         let executedProperties = try #require(executedIf["properties"] as? [String: Any])
@@ -893,6 +929,30 @@ struct EvidenceContractTests {
         )
         #expect(forbiddenCommandID["required"] as? [String] == ["commandID"])
 
+        let userDecisionIf = try #require(gateConditions[2]["if"] as? [String: Any])
+        let userDecisionProperties = try #require(
+            userDecisionIf["properties"] as? [String: Any]
+        )
+        let userDecisionStatus = try #require(
+            userDecisionProperties["status"] as? [String: Any]
+        )
+        let userDecisionThen = try #require(
+            gateConditions[2]["then"] as? [String: Any]
+        )
+        let userDecisionThenProperties = try #require(
+            userDecisionThen["properties"] as? [String: Any]
+        )
+        let userDecisionActions = try #require(
+            userDecisionThenProperties["actions"] as? [String: Any]
+        )
+        #expect(userDecisionStatus["const"] as? String == "NOT_RUN_BY_USER_DECISION")
+        #expect(userDecisionActions["minItems"] as? Int == 1)
+
+        let profileSchemaVersion = try #require(
+            properties["profileSchemaVersion"] as? [String: Any]
+        )
+        #expect(profileSchemaVersion["const"] as? Int == 1)
+
         let residualRisks = try #require(properties["residualRisks"] as? [String: Any])
         let nonEmptyString = try #require(definitions["nonEmptyString"] as? [String: Any])
         #expect(residualRisks["uniqueItems"] as? Bool == true)
@@ -919,6 +979,7 @@ struct EvidenceContractTests {
     }
 
     private func validEvidence(
+        profileSchemaVersion: Int = 1,
         permissions: PermissionPolicy? = nil,
         commands: [EvidenceCommand]? = nil,
         gates: [EvidenceGate]? = nil,
@@ -932,7 +993,7 @@ struct EvidenceContractTests {
             sourceRevision: sourceRevision,
             engineVersion: "0.1.0",
             engineRevision: engineRevision,
-            profileSchemaVersion: 1,
+            profileSchemaVersion: profileSchemaVersion,
             profileSHA256: profileHash,
             toolchain: toolchain,
             permissions: permissions ?? policy,
@@ -963,6 +1024,7 @@ struct EvidenceContractTests {
 
     private func expectation(
         sourceRevision: String? = nil,
+        profileSchemaVersion: Int = 1,
         artifactHash: String? = nil,
         commands: [String: EvidenceCommandExpectation]? = nil,
         gates: [String: EvidenceGateExpectation]? = nil,
@@ -976,7 +1038,7 @@ struct EvidenceContractTests {
             sourceRevision: sourceRevision ?? self.sourceRevision,
             engineVersion: "0.1.0",
             engineRevision: engineRevision,
-            profileSchemaVersion: 1,
+            profileSchemaVersion: profileSchemaVersion,
             profileSHA256: profileHash,
             toolchain: toolchain,
             permissions: policy,
@@ -987,7 +1049,7 @@ struct EvidenceContractTests {
                 )
             ],
             gatesByID: gates ?? [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static")
+                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass)
             ],
             userAuthorizedActions: userAuthorizedActions,
             testCounts: testCounts,

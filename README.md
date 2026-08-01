@@ -89,7 +89,7 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
 - User authorization is trusted only when supplied out of band in `EvidenceExpectation`; a
   self-asserted `USER` value inside evidence is insufficient.
 - Expected command SHA-256 identities, exit codes, and complete permission-action sets, exact
-  gate-to-command bindings, trusted non-executed gate statuses, source and engine revisions,
+  gate-to-command bindings, trusted statuses for every gate, source and engine revisions,
   profile/toolchain facts, permission snapshot, test counts, and artifact hashes are supplied by
   the verifier caller rather than copied from the evidence under review. Raw argv is not serialized
   into evidence.

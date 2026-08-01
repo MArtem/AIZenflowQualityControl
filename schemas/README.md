@@ -18,8 +18,8 @@ for exact source/engine/profile identity, toolchain and permissions, SHA-256 com
 explicit gate statuses, optional test counts and review SHA, artifact hashes, residual risks, and
 the claimed advisory verdict. Raw command arguments are excluded from the evidence model. Runtime
 verification additionally requires trusted out-of-band expectations for the complete
-command/action sets, terminal command outcomes, exact gate-to-command bindings, trusted
-non-executed gate statuses, user-authorized actions, test-count gate, and artifact hashes.
+command/action sets, terminal command outcomes, exact gate-to-command bindings, trusted status for
+every gate, user-authorized actions, test-count gate, and artifact hashes.
 The schema requires `commandID` for `PASS`/`FAIL` and forbids it for explicit non-executed states.
 Artifact paths use the same non-empty relative-segment rules in schema and runtime. The schema is
 not yet wired to a CLI evidence loader or producer. Bounded strings use Unicode-scalar length in

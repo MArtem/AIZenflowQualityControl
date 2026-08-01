@@ -234,16 +234,16 @@ public struct EvidenceCommandExpectation: Equatable, Sendable {
 public struct EvidenceGateExpectation: Equatable, Sendable {
     public let commandID: String?
     public let actions: Set<PermissionAction>
-    public let nonExecutedStatus: GateStatus?
+    public let status: GateStatus
 
     public init(
         commandID: String? = nil,
         actions: Set<PermissionAction> = [],
-        nonExecutedStatus: GateStatus? = nil
+        status: GateStatus
     ) {
         self.commandID = commandID
         self.actions = actions
-        self.nonExecutedStatus = nonExecutedStatus
+        self.status = status
     }
 }
 
@@ -357,6 +357,11 @@ public enum EvidenceVerifier {
             &issues
         )
         require(
+            evidence.profileSchemaVersion == 1 && expected.profileSchemaVersion == 1,
+            "QC.EVIDENCE.UNSUPPORTED_PROFILE_SCHEMA",
+            &issues
+        )
+        require(
             evidence.profileSchemaVersion == expected.profileSchemaVersion,
             "QC.EVIDENCE.PROFILE_SCHEMA_MISMATCH",
             &issues
@@ -435,7 +440,7 @@ public enum EvidenceVerifier {
         return EvidenceVerification(verdict: derivedVerdict, issues: [])
     }
 
-    public static func aggregate(_ gates: [EvidenceGate]) -> AdvisoryVerdict {
+    static func aggregate(_ gates: [EvidenceGate]) -> AdvisoryVerdict {
         guard !gates.isEmpty else {
             return .blocked
         }
@@ -739,10 +744,7 @@ public enum EvidenceVerifier {
         _ status: GateStatus,
         expectation: EvidenceGateExpectation
     ) -> Bool {
-        if expectation.commandID == nil {
-            return expectation.nonExecutedStatus == status
-        }
-        return expectation.nonExecutedStatus == nil
+        expectation.status == status
     }
 
     private static func validateReviewRevision(

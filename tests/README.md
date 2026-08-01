@@ -17,10 +17,10 @@ Test creation, modification, and execution remain separately user-controlled. Te
 inputs and SwiftPM scratch output must stay under `.quality-control-cache/` inside the repository.
 
 After explicit local-execution permission, run the following from the repository root. The Stage
-7/9A corrective contained run on 2026-07-30 passed 53 tests in four suites with warnings treated as
+7/9A corrective contained run on 2026-08-01 passed 55 tests in four suites with warnings treated as
 errors. It includes regressions for digest-only command identity without raw argv, complete
 permission-action sets, trusted terminal outcomes, status-dependent gate command IDs,
-gate accounting for every command, trusted non-executed statuses, early collection-limit returns,
+gate accounting for every command, trusted statuses for every gate, early collection-limit returns,
 schema/runtime path and Unicode-length parity, unique residual risks, all-skipped counts, integer
 overflow in untrusted counts, and failed-count `READY` claims:
 
