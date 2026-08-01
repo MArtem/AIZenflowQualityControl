@@ -25,7 +25,8 @@ application integration. Stage 9A does not add an evidence CLI command, cryptogr
 artifact hashing, or workflow evidence producer; those execution-boundary integrations remain
 separate work and no current diagnostic is promoted to authoritative release proof.
 The public `quality static` command now isolates the cooperative scanner in a child process, applies
-a 245-second hard deadline inside the five-minute workflow ceiling, bounds captured JSON to 8 MiB,
+a 245-second local hard ceiling, dynamically shortens it to preserve the five-minute workflow job
+budget, terminates the worker when its authenticated parent exits, bounds captured JSON to 8 MiB,
 and validates report/exit consistency before forwarding a result. Buildable Xcode fixtures remain
 separate work and are not claimed by this boundary.
 

@@ -70,16 +70,22 @@ private func emit(_ report: QualityReport) -> Never {
 }
 
 private let staticWorkerEnvironmentKey = "AIZENFLOW_QUALITY_INTERNAL_STATIC_WORKER"
+private let staticJobDeadlineEnvironmentKey = "QC_STATIC_JOB_DEADLINE_EPOCH_SECONDS"
 
-private func currentExecutableIsParentProcess() -> Bool {
+private func trustedParentProcessIdentifier() -> pid_t? {
     guard let executableURL = Bundle.main.executableURL else {
-        return false
+        return nil
     }
 
+    let parentProcessIdentifier = getppid()
     var buffer = [CChar](repeating: 0, count: 4_096)
-    let pathLength = proc_pidpath(getppid(), &buffer, UInt32(buffer.count))
+    let pathLength = proc_pidpath(
+        parentProcessIdentifier,
+        &buffer,
+        UInt32(buffer.count)
+    )
     guard pathLength > 0 else {
-        return false
+        return nil
     }
 
     let parentExecutablePath = String(
@@ -89,9 +95,12 @@ private func currentExecutableIsParentProcess() -> Bool {
     let parentExecutableURL = URL(fileURLWithPath: parentExecutablePath)
         .resolvingSymlinksInPath()
         .standardizedFileURL
-    return parentExecutableURL == executableURL
+    guard parentExecutableURL == executableURL
         .resolvingSymlinksInPath()
-        .standardizedFileURL
+        .standardizedFileURL else {
+        return nil
+    }
+    return parentProcessIdentifier
 }
 
 private func runStaticWorker(
@@ -125,9 +134,15 @@ private func runStaticWorker(
     process.environment = environment
 
     do {
+        guard let timeoutSeconds = StaticWorkerBoundary.timeoutSeconds(
+            deadlineEpochSeconds: environment[staticJobDeadlineEnvironmentKey],
+            nowEpochSeconds: Date().timeIntervalSince1970
+        ) else {
+            return StaticWorkerBoundary.deadlineBudgetFailure()
+        }
         let result = try BoundedProcessRunner.run(
             process,
-            timeoutSeconds: StaticWorkerBoundary.hardTimeoutSeconds,
+            timeoutSeconds: timeoutSeconds,
             maximumOutputBytes: StaticWorkerBoundary.maximumOutputBytes
         )
         return StaticWorkerBoundary.report(for: result)
@@ -196,13 +211,21 @@ do {
 
     case "__static-worker":
         guard ProcessInfo.processInfo.environment[staticWorkerEnvironmentKey] == "1",
-              currentExecutableIsParentProcess() else {
+              let parentProcessIdentifier = trustedParentProcessIdentifier() else {
             emit(
                 QualityCommands.blockedUsage(
                     command: "static",
                     message: "The internal static worker cannot be invoked directly."
                 )
             )
+        }
+        let parentExitMonitor = ProcessExitMonitor(
+            processIdentifier: parentProcessIdentifier
+        ) {
+            Darwin._exit(2)
+        }
+        guard getppid() == parentProcessIdentifier else {
+            Darwin._exit(2)
         }
         let options = try parseOptions(
             arguments.dropFirst(2),
@@ -211,13 +234,14 @@ do {
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
         let repositoryRoot = try required("--repository-root", in: options)
-        emit(
-            QualityCommands.staticScan(
-                profileURL: fileURL(profile),
-                policyURL: fileURL(policy),
-                repositoryRoot: fileURL(repositoryRoot)
-            )
+        let report = QualityCommands.staticScan(
+            profileURL: fileURL(profile),
+            policyURL: fileURL(policy),
+            repositoryRoot: fileURL(repositoryRoot)
         )
+        withExtendedLifetime(parentExitMonitor) {
+            emit(report)
+        }
 
     default:
         emit(

@@ -17,6 +17,13 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Establish bounded job deadline
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline_epoch_seconds="$(($(date +%s) + 270))"
+          echo "QC_STATIC_JOB_DEADLINE_EPOCH_SECONDS=${deadline_epoch_seconds}" >> "${GITHUB_ENV}"
+
       - name: Check out the selected revision
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:

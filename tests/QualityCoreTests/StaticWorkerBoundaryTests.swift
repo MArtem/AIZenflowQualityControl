@@ -4,6 +4,66 @@ import Testing
 
 @Suite("Static worker hard-boundary contracts")
 struct StaticWorkerBoundaryTests {
+    @Test("Workflow deadlines preserve a bounded completion reserve")
+    func workflowDeadlineBudgetIsBounded() {
+        #expect(
+            StaticWorkerBoundary.timeoutSeconds(
+                deadlineEpochSeconds: nil,
+                nowEpochSeconds: 100
+            ) == StaticWorkerBoundary.hardTimeoutSeconds
+        )
+        #expect(
+            StaticWorkerBoundary.timeoutSeconds(
+                deadlineEpochSeconds: "250",
+                nowEpochSeconds: 100
+            ) == 145
+        )
+        #expect(
+            StaticWorkerBoundary.timeoutSeconds(
+                deadlineEpochSeconds: "1000",
+                nowEpochSeconds: 100
+            ) == StaticWorkerBoundary.hardTimeoutSeconds
+        )
+        #expect(
+            StaticWorkerBoundary.timeoutSeconds(
+                deadlineEpochSeconds: "not-a-deadline",
+                nowEpochSeconds: 100
+            ) == nil
+        )
+        #expect(
+            StaticWorkerBoundary.timeoutSeconds(
+                deadlineEpochSeconds: "105",
+                nowEpochSeconds: 100
+            ) == nil
+        )
+        #expect(StaticWorkerBoundary.deadlineBudgetFailure().status == .blocked)
+    }
+
+    @Test("A process exit monitor observes termination")
+    func processExitMonitorObservesTermination() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["5"]
+        try process.run()
+        defer {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+
+        let processExited = DispatchSemaphore(value: 0)
+        let monitor = ProcessExitMonitor(
+            processIdentifier: process.processIdentifier
+        ) {
+            processExited.signal()
+        }
+
+        process.terminate()
+        #expect(processExited.wait(timeout: .now() + 2) == .success)
+        process.waitUntilExit()
+        withExtendedLifetime(monitor) {}
+    }
+
     @Test("A blocked child is terminated at the hard deadline")
     func hardDeadlineTerminatesBlockedChild() throws {
         let inputPipe = Pipe()

@@ -63,6 +63,29 @@ private final class BoundedOutputAccumulator: @unchecked Sendable {
     }
 }
 
+package final class ProcessExitMonitor: @unchecked Sendable {
+    private let source: any DispatchSourceProcess
+
+    package init(
+        processIdentifier: pid_t,
+        onExit: @escaping @Sendable () -> Void
+    ) {
+        precondition(processIdentifier > 0)
+
+        source = DispatchSource.makeProcessSource(
+            identifier: processIdentifier,
+            eventMask: .exit,
+            queue: DispatchQueue.global(qos: .userInitiated)
+        )
+        source.setEventHandler(handler: onExit)
+        source.resume()
+    }
+
+    deinit {
+        source.cancel()
+    }
+}
+
 package enum BoundedProcessRunner {
     private static let terminationGraceSeconds = 1.0
     private static let drainGraceSeconds = 1.0
@@ -146,7 +169,35 @@ package enum BoundedProcessRunner {
 
 package enum StaticWorkerBoundary {
     package static let hardTimeoutSeconds = 245.0
+    package static let completionReserveSeconds = 5.0
     package static let maximumOutputBytes = 8 * 1_024 * 1_024
+
+    package static func timeoutSeconds(
+        deadlineEpochSeconds: String?,
+        nowEpochSeconds: TimeInterval
+    ) -> TimeInterval? {
+        guard let deadlineEpochSeconds else {
+            return hardTimeoutSeconds
+        }
+        guard let deadline = TimeInterval(deadlineEpochSeconds),
+              deadline.isFinite,
+              nowEpochSeconds.isFinite else {
+            return nil
+        }
+
+        let available = deadline - nowEpochSeconds - completionReserveSeconds
+        guard available.isFinite, available > 0 else {
+            return nil
+        }
+        return min(hardTimeoutSeconds, available)
+    }
+
+    package static func deadlineBudgetFailure() -> QualityReport {
+        blocked(
+            id: "QC.STATIC.DEADLINE_BUDGET",
+            message: "Static worker could not start within the remaining workflow deadline."
+        )
+    }
 
     package static func report(for result: BoundedProcessResult) -> QualityReport {
         if result.timedOut {
