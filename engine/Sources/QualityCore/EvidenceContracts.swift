@@ -800,7 +800,6 @@ public enum EvidenceVerifier {
         userAuthorizedActions: Set<PermissionAction>,
         issues: inout [EvidenceVerificationIssue]
     ) {
-        require(!commands.isEmpty, "QC.EVIDENCE.NO_COMMANDS", &issues)
         require(
             Set(commands.map(\.id)).count == commands.count,
             "QC.EVIDENCE.DUPLICATE_COMMAND_ID",

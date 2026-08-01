@@ -96,6 +96,8 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
 - Every recorded command has a bounded terminal exit code. Every action in a multi-permission
   command is evaluated independently, every command is accounted for by a gate, and gates must
   carry the same complete action set.
+- A command set may be empty only when no gate references a command, allowing truthful
+  pre-execution `BLOCKED` and `NOT_RUN_BY_USER_DECISION` evidence.
 - Untrusted evidence JSON enters through bounded `EvidenceLoader`; the complete evidence model is
   encode-only so callers cannot bypass duplicate-key, unknown-property, or explicit-null checks by
   decoding it directly. String validation examines at most one scalar beyond the configured

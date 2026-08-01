@@ -872,6 +872,64 @@ struct EvidenceContractTests {
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.CLAIMED_VERDICT_MISMATCH"))
     }
 
+    @Test("Commandless non-execution evidence preserves its advisory outcome")
+    func commandlessNonExecutionIsRepresentable() {
+        let declined = validEvidence(
+            commands: [],
+            gates: [
+                EvidenceGate(
+                    id: "QC.TESTS",
+                    status: .notRunByUserDecision,
+                    message: "Tests were declined before execution.",
+                    actions: [.localTestExecution]
+                )
+            ],
+            claimedVerdict: .needsOwnerDecision
+        )
+        let unavailable = validEvidence(
+            commands: [],
+            gates: [
+                EvidenceGate(
+                    id: "QC.TOOLCHAIN",
+                    status: .blocked,
+                    message: "Required toolchain is unavailable."
+                )
+            ],
+            claimedVerdict: .blocked
+        )
+
+        let declinedResult = EvidenceVerifier.verify(
+            declined,
+            expected: expectation(
+                commands: [:],
+                gates: [
+                    "QC.TESTS": EvidenceGateExpectation(
+                        actions: [.localTestExecution],
+                        status: .notRunByUserDecision,
+                        message: "Tests were declined before execution."
+                    )
+                ]
+            )
+        )
+        let unavailableResult = EvidenceVerifier.verify(
+            unavailable,
+            expected: expectation(
+                commands: [:],
+                gates: [
+                    "QC.TOOLCHAIN": EvidenceGateExpectation(
+                        status: .blocked,
+                        message: "Required toolchain is unavailable."
+                    )
+                ]
+            )
+        )
+
+        #expect(declinedResult.verdict == .needsOwnerDecision)
+        #expect(declinedResult.issues.isEmpty)
+        #expect(unavailableResult.verdict == .blocked)
+        #expect(unavailableResult.issues.isEmpty)
+    }
+
     @Test("Evidence has a stable encoded representation and bounded loader")
     func evidenceRoundTrip() throws {
         let evidence = validEvidence()
@@ -1006,6 +1064,8 @@ struct EvidenceContractTests {
         #expect(commandProperties["commandLine"] == nil)
         #expect(commandProperties["commandSHA256"] != nil)
         #expect(commandRequired.contains("commandSHA256"))
+        #expect(commandCollection["minItems"] == nil)
+        #expect(commandCollection["uniqueItems"] as? Bool == true)
         #expect(commandConditions.count == 2)
 
         let actionlessIf = try #require(commandConditions[0]["if"] as? [String: Any])
@@ -1041,6 +1101,7 @@ struct EvidenceContractTests {
         let gateSchema = try #require(gateCollection["items"] as? [String: Any])
         let gateConditions = try #require(gateSchema["allOf"] as? [[String: Any]])
         #expect(gateConditions.count == 3)
+        #expect(gateCollection["uniqueItems"] as? Bool == true)
 
         let executedIf = try #require(gateConditions[0]["if"] as? [String: Any])
         let executedProperties = try #require(executedIf["properties"] as? [String: Any])
@@ -1093,7 +1154,9 @@ struct EvidenceContractTests {
         #expect(profileSchemaVersion["const"] as? Int == 1)
 
         let residualRisks = try #require(properties["residualRisks"] as? [String: Any])
+        let artifacts = try #require(properties["artifacts"] as? [String: Any])
         let nonEmptyString = try #require(definitions["nonEmptyString"] as? [String: Any])
+        #expect(artifacts["uniqueItems"] as? Bool == true)
         #expect(residualRisks["uniqueItems"] as? Bool == true)
         #expect(nonEmptyString["maxLength"] as? Int == 4_096)
 

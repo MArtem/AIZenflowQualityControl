@@ -22,9 +22,13 @@ command/action sets, terminal command outcomes, exact gate-to-command bindings, 
 message for every gate, user-authorized actions, test-count gate, and artifact hashes.
 The schema requires `commandID` for `PASS`/`FAIL` and forbids it for explicit non-executed states.
 Actionless commands require `NOT_REQUIRED`; commands with controlled actions require `PROFILE` or
-`USER`. Artifact paths use the same non-empty relative-segment rules in schema and runtime. The
-schema is not yet wired to a CLI evidence producer. Public `EvidenceLoader` provides the only
-full-document decode path and rejects oversized input, duplicate object keys, unknown object
-properties, and explicit null optionals. `QualityEvidence` remains encode-only. Bounded strings use
+`USER`. An empty command set is valid only when runtime gate accounting finds no command reference,
+so pre-execution blocked or user-declined outcomes remain representable. Command, gate, and artifact
+arrays reject identical duplicate objects in the schema; runtime verification additionally enforces
+unique IDs or paths when entries differ. Artifact paths use the same non-empty relative-segment
+rules in schema and runtime. The schema is not yet wired to a CLI evidence producer. Public
+`EvidenceLoader` provides the only full-document decode path and rejects oversized input,
+duplicate object keys, unknown object properties, and explicit null optionals. `QualityEvidence`
+remains encode-only. Bounded strings use
 a limited Unicode-scalar scan matching JSON Schema code-point length, and residual-risk entries are
 unique in both layers.

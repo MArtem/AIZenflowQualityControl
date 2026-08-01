@@ -21,7 +21,8 @@
         "type": "object"
       },
       "maxItems": 256,
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "claimedVerdict": {
       "$ref": "#/$defs/advisoryVerdict"
@@ -110,8 +111,8 @@
         "type": "object"
       },
       "maxItems": 256,
-      "minItems": 1,
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "engineRevision": {
       "$ref": "#/$defs/gitRevision"
@@ -218,7 +219,8 @@
       },
       "maxItems": 256,
       "minItems": 1,
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
     },
     "permissions": {
       "$ref": "#/$defs/permissionPolicy"
