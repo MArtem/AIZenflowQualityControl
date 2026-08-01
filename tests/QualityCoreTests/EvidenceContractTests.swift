@@ -800,7 +800,7 @@ struct EvidenceContractTests {
 
     @Test("Oversized top-level collections stop before deeper scans")
     func collectionLimitReturnsBeforeDuplicateScan() {
-        let commands = (0...256).map { _ in
+        let commands = (0...64).map { _ in
             EvidenceCommand(
                 id: "duplicate",
                 commandSHA256: staticCommandHash,
@@ -987,8 +987,9 @@ struct EvidenceContractTests {
 
     @Test("Runtime string limits use schema Unicode-length units")
     func unicodeStringBoundsMatchSchema() {
-        let acceptedMessage = String(repeating: "é", count: 4_096)
-        let rejectedMessage = String(repeating: "é", count: 4_097)
+        let acceptedMessage = String(repeating: "é", count: 1_024)
+        let rejectedMessage = String(repeating: "é", count: 1_025)
+        let whitespaceOnlyMessage = String(repeating: "\u{200B}", count: 8)
         let accepted = validEvidence(
             gates: [
                 EvidenceGate(
@@ -1005,6 +1006,16 @@ struct EvidenceContractTests {
                     id: "QC.STATIC",
                     status: .pass,
                     message: rejectedMessage,
+                    commandID: "static"
+                )
+            ]
+        )
+        let whitespaceOnly = validEvidence(
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: whitespaceOnlyMessage,
                     commandID: "static"
                 )
             ]
@@ -1034,11 +1045,25 @@ struct EvidenceContractTests {
                 ]
             )
         )
+        let whitespaceOnlyResult = EvidenceVerifier.verify(
+            whitespaceOnly,
+            expected: expectation(
+                gates: [
+                    "QC.STATIC": EvidenceGateExpectation(
+                        commandID: "static",
+                        status: .pass,
+                        message: whitespaceOnlyMessage
+                    )
+                ]
+            )
+        )
 
         #expect(acceptedResult.verdict == .ready)
         #expect(acceptedResult.issues.isEmpty)
         #expect(rejectedResult.verdict == .bypassed)
         #expect(rejectedResult.issues.map(\.code) == ["QC.EVIDENCE.STRING_LIMIT"])
+        #expect(whitespaceOnlyResult.verdict == .bypassed)
+        #expect(whitespaceOnlyResult.issues.map(\.code) == ["QC.EVIDENCE.STRING_LIMIT"])
     }
 
     @Test("Schema constraints match runtime evidence rules")
@@ -1156,9 +1181,40 @@ struct EvidenceContractTests {
         let residualRisks = try #require(properties["residualRisks"] as? [String: Any])
         let artifacts = try #require(properties["artifacts"] as? [String: Any])
         let nonEmptyString = try #require(definitions["nonEmptyString"] as? [String: Any])
+        let maximumCollectionItems = try #require(commandCollection["maxItems"] as? Int)
+        let maximumStringScalars = try #require(nonEmptyString["maxLength"] as? Int)
         #expect(artifacts["uniqueItems"] as? Bool == true)
         #expect(residualRisks["uniqueItems"] as? Bool == true)
-        #expect(nonEmptyString["maxLength"] as? Int == 4_096)
+        #expect(maximumCollectionItems == 64)
+        #expect(gateCollection["maxItems"] as? Int == maximumCollectionItems)
+        #expect(artifacts["maxItems"] as? Int == maximumCollectionItems)
+        #expect(residualRisks["maxItems"] as? Int == maximumCollectionItems)
+        #expect(maximumStringScalars == 1_024)
+
+        let nonWhitespacePattern = try #require(nonEmptyString["pattern"] as? String)
+        let zeroWidthSpaces = String(repeating: "\u{200B}", count: 2)
+        let zeroWidthRange = NSRange(
+            zeroWidthSpaces.startIndex..<zeroWidthSpaces.endIndex,
+            in: zeroWidthSpaces
+        )
+        #expect(
+            try NSRegularExpression(pattern: nonWhitespacePattern)
+                .firstMatch(in: zeroWidthSpaces, range: zeroWidthRange) == nil
+        )
+
+        let maximumStringSlots = 4
+            + maximumCollectionItems
+            + (3 * maximumCollectionItems)
+            + maximumCollectionItems
+            + maximumCollectionItems
+        let conservativeEscapedStringBytes = maximumStringSlots
+            * maximumStringScalars
+            * 12
+        let structuralAllowanceBytes = 1_000_000
+        #expect(
+            conservativeEscapedStringBytes + structuralAllowanceBytes
+                < EvidenceLoader.maximumDocumentBytes
+        )
 
         let relativePath = try #require(definitions["relativePath"] as? [String: Any])
         let clauses = try #require(relativePath["allOf"] as? [[String: Any]])

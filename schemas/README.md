@@ -29,6 +29,7 @@ unique IDs or paths when entries differ. Artifact paths use the same non-empty r
 rules in schema and runtime. The schema is not yet wired to a CLI evidence producer. Public
 `EvidenceLoader` provides the only full-document decode path and rejects oversized input,
 duplicate object keys, unknown object properties, and explicit null optionals. `QualityEvidence`
-remains encode-only. Bounded strings use
-a limited Unicode-scalar scan matching JSON Schema code-point length, and residual-risk entries are
-unique in both layers.
+remains encode-only. Evidence documents are capped at 8 MiB, top-level collections at 64 entries,
+and bounded strings at 1,024 Unicode scalars. Runtime and schema share an explicit stable whitespace
+set, including U+200B, and the schema's conservative worst-case escaped-string budget remains below
+the loader cap. Residual-risk entries are unique in both layers.

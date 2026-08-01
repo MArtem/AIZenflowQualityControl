@@ -43,6 +43,11 @@ private func rejectNullEvidenceValue<Key: CodingKey>(
     }
 }
 
+private enum EvidenceValidationLimits {
+    static let maximumCollectionItems = 64
+    static let maximumStringScalars = 1_024
+}
+
 public enum PermissionAction: String, Codable, CaseIterable, Sendable {
     case testCreation
     case testModification
@@ -380,12 +385,19 @@ public struct QualityEvidence: Encodable, Sendable {
 }
 
 public enum EvidenceLoader {
+    public static let maximumDocumentBytes = 8 * 1_024 * 1_024
+
     public static func load(from url: URL) throws -> QualityEvidence {
-        try decode(JSONDocumentConstraints.loadData(from: url))
+        try decode(
+            JSONDocumentConstraints.loadData(
+                from: url,
+                maximumBytes: maximumDocumentBytes
+            )
+        )
     }
 
     public static func decode(_ data: Data) throws -> QualityEvidence {
-        guard data.count <= JSONDocumentConstraints.maximumBytes else {
+        guard data.count <= maximumDocumentBytes else {
             throw EvidenceDocumentLimitError()
         }
         try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
@@ -1026,10 +1038,11 @@ public enum EvidenceVerifier {
         _ evidence: QualityEvidence,
         issues: inout [EvidenceVerificationIssue]
     ) -> Bool {
-        let topLevelCollectionsAreBounded = evidence.commands.count <= 256
-            && evidence.gates.count <= 256
-            && evidence.artifacts.count <= 256
-            && evidence.residualRisks.count <= 256
+        let topLevelCollectionsAreBounded = evidence.commands.count
+            <= EvidenceValidationLimits.maximumCollectionItems
+            && evidence.gates.count <= EvidenceValidationLimits.maximumCollectionItems
+            && evidence.artifacts.count <= EvidenceValidationLimits.maximumCollectionItems
+            && evidence.residualRisks.count <= EvidenceValidationLimits.maximumCollectionItems
         require(
             topLevelCollectionsAreBounded,
             "QC.EVIDENCE.COLLECTION_LIMIT",
@@ -1167,14 +1180,35 @@ public enum EvidenceVerifier {
         var scalarCount = 0
         var containsNonWhitespace = false
 
-        for scalar in value.unicodeScalars.prefix(4_097) {
+        for scalar in value.unicodeScalars.prefix(
+            EvidenceValidationLimits.maximumStringScalars + 1
+        ) {
             scalarCount += 1
-            if !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            if !isEvidenceWhitespace(scalar) {
                 containsNonWhitespace = true
             }
         }
 
-        return scalarCount <= 4_096 && containsNonWhitespace
+        return scalarCount <= EvidenceValidationLimits.maximumStringScalars
+            && containsNonWhitespace
+    }
+
+    private static func isEvidenceWhitespace(_ scalar: UnicodeScalar) -> Bool {
+        switch scalar.value {
+        case 0x0009...0x000D,
+             0x0020,
+             0x0085,
+             0x00A0,
+             0x1680,
+             0x2000...0x200B,
+             0x2028...0x2029,
+             0x202F,
+             0x205F,
+             0x3000:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func require(

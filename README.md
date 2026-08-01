@@ -101,7 +101,8 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
 - Untrusted evidence JSON enters through bounded `EvidenceLoader`; the complete evidence model is
   encode-only so callers cannot bypass duplicate-key, unknown-property, or explicit-null checks by
   decoding it directly. String validation examines at most one scalar beyond the configured
-  4,096-scalar limit before failing closed.
+  1,024-scalar limit before failing closed. Evidence documents are capped at 8 MiB and top-level
+  collections at 64 entries.
 - `SKIPPED` aggregates to `BLOCKED`, `NOT_RUN_BY_USER_DECISION` to `NEEDS_OWNER_DECISION`, and a
   claimed verdict inconsistent with the gate set becomes `BYPASSED`.
 - `READY_WITH_ACCEPTED_RISK` is represented but is not automatically derived; ownership and
