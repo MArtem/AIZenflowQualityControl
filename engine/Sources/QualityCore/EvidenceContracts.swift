@@ -1,5 +1,48 @@
 import Foundation
 
+private struct EvidenceDynamicCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue: Int) {
+        return nil
+    }
+}
+
+private func rejectUnknownEvidenceKeys(
+    from decoder: Decoder,
+    allowed: Set<String>
+) throws {
+    let container = try decoder.container(keyedBy: EvidenceDynamicCodingKey.self)
+    guard container.allKeys.allSatisfy({ allowed.contains($0.stringValue) }) else {
+        throw DecodingError.dataCorrupted(
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Evidence contains an unknown property."
+            )
+        )
+    }
+}
+
+private func rejectNullEvidenceValue<Key: CodingKey>(
+    in container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws {
+    guard try !container.decodeNil(forKey: key) else {
+        throw DecodingError.valueNotFound(
+            String.self,
+            DecodingError.Context(
+                codingPath: container.codingPath + [key],
+                debugDescription: "Evidence optional properties must be omitted rather than null."
+            )
+        )
+    }
+}
+
 public enum PermissionAction: String, Codable, CaseIterable, Sendable {
     case testCreation
     case testModification
@@ -90,6 +133,21 @@ public struct EvidenceToolchain: Codable, Equatable, Sendable {
         self.swiftVersion = swiftVersion
         self.xcodeVersion = xcodeVersion
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case swiftVersion
+        case xcodeVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: ["swiftVersion", "xcodeVersion"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        swiftVersion = try container.decode(String.self, forKey: .swiftVersion)
+        xcodeVersion = try container.decode(String.self, forKey: .xcodeVersion)
+    }
 }
 
 public struct EvidenceCommand: Codable, Sendable {
@@ -111,6 +169,27 @@ public struct EvidenceCommand: Codable, Sendable {
         self.exitCode = exitCode
         self.actions = actions
         self.authorization = authorization
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case commandSHA256
+        case exitCode
+        case actions
+        case authorization
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: ["id", "commandSHA256", "exitCode", "actions", "authorization"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        commandSHA256 = try container.decode(String.self, forKey: .commandSHA256)
+        exitCode = try container.decode(Int.self, forKey: .exitCode)
+        actions = try container.decode([PermissionAction].self, forKey: .actions)
+        authorization = try container.decode(EvidenceAuthorization.self, forKey: .authorization)
     }
 }
 
@@ -134,6 +213,40 @@ public struct EvidenceGate: Codable, Sendable {
         self.commandID = commandID
         self.actions = actions
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case status
+        case message
+        case commandID
+        case actions
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: ["id", "status", "message", "commandID", "actions"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        status = try container.decode(GateStatus.self, forKey: .status)
+        message = try container.decode(String.self, forKey: .message)
+        if container.contains(.commandID) {
+            guard try !container.decodeNil(forKey: .commandID) else {
+                throw DecodingError.valueNotFound(
+                    String.self,
+                    DecodingError.Context(
+                        codingPath: container.codingPath + [CodingKeys.commandID],
+                        debugDescription: "Evidence commandID must be omitted rather than null."
+                    )
+                )
+            }
+            commandID = try container.decode(String.self, forKey: .commandID)
+        } else {
+            commandID = nil
+        }
+        actions = try container.decode([PermissionAction].self, forKey: .actions)
+    }
 }
 
 public struct EvidenceTestCounts: Codable, Equatable, Sendable {
@@ -148,6 +261,25 @@ public struct EvidenceTestCounts: Codable, Equatable, Sendable {
         self.failed = failed
         self.skipped = skipped
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+        case passed
+        case failed
+        case skipped
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: ["total", "passed", "failed", "skipped"]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        total = try container.decode(Int.self, forKey: .total)
+        passed = try container.decode(Int.self, forKey: .passed)
+        failed = try container.decode(Int.self, forKey: .failed)
+        skipped = try container.decode(Int.self, forKey: .skipped)
+    }
 }
 
 public struct EvidenceArtifact: Codable, Sendable {
@@ -158,9 +290,21 @@ public struct EvidenceArtifact: Codable, Sendable {
         self.path = path
         self.sha256 = sha256
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case sha256
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(from: decoder, allowed: ["path", "sha256"])
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.decode(String.self, forKey: .path)
+        sha256 = try container.decode(String.self, forKey: .sha256)
+    }
 }
 
-public struct QualityEvidence: Codable, Sendable {
+public struct QualityEvidence: Encodable, Sendable {
     public let schemaVersion: Int
     public let sourceRepository: String
     public let sourceRevision: String
@@ -213,6 +357,193 @@ public struct QualityEvidence: Codable, Sendable {
         self.residualRisks = residualRisks
         self.claimedVerdict = claimedVerdict
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case sourceRepository
+        case sourceRevision
+        case engineVersion
+        case engineRevision
+        case profileSchemaVersion
+        case profileSHA256
+        case toolchain
+        case permissions
+        case commands
+        case gates
+        case testCounts
+        case reviewRevision
+        case artifacts
+        case residualRisks
+        case claimedVerdict
+    }
+
+}
+
+public enum EvidenceLoader {
+    public static func load(from url: URL) throws -> QualityEvidence {
+        try decode(JSONDocumentConstraints.loadData(from: url))
+    }
+
+    public static func decode(_ data: Data) throws -> QualityEvidence {
+        guard data.count <= JSONDocumentConstraints.maximumBytes else {
+            throw EvidenceDocumentLimitError()
+        }
+        try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
+        return try JSONDecoder().decode(EvidenceDocument.self, from: data).evidence
+    }
+}
+
+private struct EvidenceDocument: Decodable {
+    let schemaVersion: Int
+    let sourceRepository: String
+    let sourceRevision: String
+    let engineVersion: String
+    let engineRevision: String
+    let profileSchemaVersion: Int
+    let profileSHA256: String
+    let toolchain: EvidenceToolchain
+    let permissions: PermissionPolicy
+    let commands: [EvidenceCommand]
+    let gates: [EvidenceGate]
+    let testCounts: EvidenceTestCounts?
+    let reviewRevision: String?
+    let artifacts: [EvidenceArtifact]
+    let residualRisks: [String]
+    let claimedVerdict: AdvisoryVerdict
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion
+        case sourceRepository
+        case sourceRevision
+        case engineVersion
+        case engineRevision
+        case profileSchemaVersion
+        case profileSHA256
+        case toolchain
+        case permissions
+        case commands
+        case gates
+        case testCounts
+        case reviewRevision
+        case artifacts
+        case residualRisks
+        case claimedVerdict
+    }
+
+    init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue))
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        sourceRepository = try container.decode(String.self, forKey: .sourceRepository)
+        sourceRevision = try container.decode(String.self, forKey: .sourceRevision)
+        engineVersion = try container.decode(String.self, forKey: .engineVersion)
+        engineRevision = try container.decode(String.self, forKey: .engineRevision)
+        profileSchemaVersion = try container.decode(Int.self, forKey: .profileSchemaVersion)
+        profileSHA256 = try container.decode(String.self, forKey: .profileSHA256)
+        toolchain = try container.decode(EvidenceToolchain.self, forKey: .toolchain)
+        permissions = try container.decode(StrictEvidencePermissionPolicy.self, forKey: .permissions).policy
+        commands = try container.decode([EvidenceCommand].self, forKey: .commands)
+        gates = try container.decode([EvidenceGate].self, forKey: .gates)
+        if container.contains(.testCounts) {
+            try rejectNullEvidenceValue(in: container, forKey: .testCounts)
+            testCounts = try container.decode(EvidenceTestCounts.self, forKey: .testCounts)
+        } else {
+            testCounts = nil
+        }
+        if container.contains(.reviewRevision) {
+            try rejectNullEvidenceValue(in: container, forKey: .reviewRevision)
+            reviewRevision = try container.decode(String.self, forKey: .reviewRevision)
+        } else {
+            reviewRevision = nil
+        }
+        artifacts = try container.decode([EvidenceArtifact].self, forKey: .artifacts)
+        residualRisks = try container.decode([String].self, forKey: .residualRisks)
+        claimedVerdict = try container.decode(AdvisoryVerdict.self, forKey: .claimedVerdict)
+    }
+
+    var evidence: QualityEvidence {
+        QualityEvidence(
+            schemaVersion: schemaVersion,
+            sourceRepository: sourceRepository,
+            sourceRevision: sourceRevision,
+            engineVersion: engineVersion,
+            engineRevision: engineRevision,
+            profileSchemaVersion: profileSchemaVersion,
+            profileSHA256: profileSHA256,
+            toolchain: toolchain,
+            permissions: permissions,
+            commands: commands,
+            gates: gates,
+            testCounts: testCounts,
+            reviewRevision: reviewRevision,
+            artifacts: artifacts,
+            residualRisks: residualRisks,
+            claimedVerdict: claimedVerdict
+        )
+    }
+}
+
+private struct EvidenceDocumentLimitError: Error {}
+
+private struct StrictEvidencePermissionPolicy: Decodable {
+    let testCreation: PermissionDecision
+    let testModification: PermissionDecision
+    let localTestExecution: PermissionDecision
+    let githubExecution: GitHubExecutionMode
+    let uiTests: PermissionDecision
+    let simulatorOrDevice: PermissionDecision
+    let performanceOrInstruments: PermissionDecision
+
+    private enum CodingKeys: String, CodingKey {
+        case testCreation
+        case testModification
+        case localTestExecution
+        case githubExecution
+        case uiTests
+        case simulatorOrDevice
+        case performanceOrInstruments
+    }
+
+    init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: [
+                "testCreation",
+                "testModification",
+                "localTestExecution",
+                "githubExecution",
+                "uiTests",
+                "simulatorOrDevice",
+                "performanceOrInstruments"
+            ]
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        testCreation = try container.decode(PermissionDecision.self, forKey: .testCreation)
+        testModification = try container.decode(PermissionDecision.self, forKey: .testModification)
+        localTestExecution = try container.decode(PermissionDecision.self, forKey: .localTestExecution)
+        githubExecution = try container.decode(GitHubExecutionMode.self, forKey: .githubExecution)
+        uiTests = try container.decode(PermissionDecision.self, forKey: .uiTests)
+        simulatorOrDevice = try container.decode(PermissionDecision.self, forKey: .simulatorOrDevice)
+        performanceOrInstruments = try container.decode(
+            PermissionDecision.self,
+            forKey: .performanceOrInstruments
+        )
+    }
+
+    var policy: PermissionPolicy {
+        PermissionPolicy(
+            testCreation: testCreation,
+            testModification: testModification,
+            localTestExecution: localTestExecution,
+            githubExecution: githubExecution,
+            uiTests: uiTests,
+            simulatorOrDevice: simulatorOrDevice,
+            performanceOrInstruments: performanceOrInstruments
+        )
+    }
 }
 
 public struct EvidenceCommandExpectation: Equatable, Sendable {
@@ -235,15 +566,18 @@ public struct EvidenceGateExpectation: Equatable, Sendable {
     public let commandID: String?
     public let actions: Set<PermissionAction>
     public let status: GateStatus
+    public let message: String
 
     public init(
         commandID: String? = nil,
         actions: Set<PermissionAction> = [],
-        status: GateStatus
+        status: GateStatus,
+        message: String
     ) {
         self.commandID = commandID
         self.actions = actions
         self.status = status
+        self.message = message
     }
 }
 
@@ -565,6 +899,7 @@ public enum EvidenceVerifier {
                             && Set($0.actions) == expectation.actions
                             && Set($0.actions).count == $0.actions.count
                             && expectedStatusMatches($0.status, expectation: expectation)
+                            && $0.message == expectation.message
                     }
                 },
             "QC.EVIDENCE.GATE_SET_MISMATCH",
@@ -830,8 +1165,17 @@ public enum EvidenceVerifier {
     }
 
     private static func isBoundedNonEmptyString(_ value: String) -> Bool {
-        value.unicodeScalars.count <= 4_096
-            && value.rangeOfCharacter(from: .whitespacesAndNewlines.inverted) != nil
+        var scalarCount = 0
+        var containsNonWhitespace = false
+
+        for scalar in value.unicodeScalars.prefix(4_097) {
+            scalarCount += 1
+            if !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                containsNonWhitespace = true
+            }
+        }
+
+        return scalarCount <= 4_096 && containsNonWhitespace
     }
 
     private static func require(

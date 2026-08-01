@@ -8,19 +8,21 @@ path/symlink boundaries, scan ceilings and cooperative timeouts, immutable polic
 passing/failing fixtures, independent permission decisions, and versioned evidence verification.
 Evidence cases prove that stale source/review SHAs, changed permission snapshots, forged command
 identities or artifact sets, incomplete multi-action authorization, missing or forged terminal outcomes,
-unaccounted commands, upgraded non-executed statuses, missing trusted user authorization,
-prohibited execution, nonzero `PASS` commands, all-skipped counts, skipped gates, and false claimed
-verdicts cannot produce normal `READY`. Collection-limit regressions also prove that oversized
-evidence returns before deeper duplicate scans.
+unaccounted commands, upgraded statuses or forged messages, missing trusted user authorization,
+prohibited execution, nonzero `PASS` commands, all-skipped counts, skipped gates, schema-invalid
+JSON fields, and false claimed verdicts cannot produce normal `READY`. Collection and string-limit
+regressions also prove that oversized evidence stops before unbounded deeper scans.
 
 Test creation, modification, and execution remain separately user-controlled. Temporary test
 inputs and SwiftPM scratch output must stay under `.quality-control-cache/` inside the repository.
 
 After explicit local-execution permission, run the following from the repository root. The Stage
-7/9A corrective contained run on 2026-08-01 passed 55 tests in four suites with warnings treated as
+7/9A corrective contained run on 2026-08-01 passed 57 tests in four suites with warnings treated as
 errors. It includes regressions for digest-only command identity without raw argv, complete
 permission-action sets, trusted terminal outcomes, status-dependent gate command IDs,
-gate accounting for every command, trusted statuses for every gate, early collection-limit returns,
+gate accounting for every command, trusted statuses and messages for every gate, bounded evidence
+loading with duplicate/unknown/null rejection, action-dependent schema authorization, early
+collection/string-limit returns,
 schema/runtime path and Unicode-length parity, unique residual risks, all-skipped counts, integer
 overflow in untrusted counts, and failed-count `READY` claims:
 

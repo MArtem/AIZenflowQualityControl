@@ -29,6 +29,49 @@
     "commands": {
       "items": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "maxItems": 0
+                }
+              },
+              "required": [
+                "actions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "authorization": {
+                  "const": "NOT_REQUIRED"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "actions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "authorization": {
+                  "enum": [
+                    "PROFILE",
+                    "USER"
+                  ]
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "actions": {
             "items": {

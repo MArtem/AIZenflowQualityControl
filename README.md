@@ -89,13 +89,17 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
 - User authorization is trusted only when supplied out of band in `EvidenceExpectation`; a
   self-asserted `USER` value inside evidence is insufficient.
 - Expected command SHA-256 identities, exit codes, and complete permission-action sets, exact
-  gate-to-command bindings, trusted statuses for every gate, source and engine revisions,
-  profile/toolchain facts, permission snapshot, test counts, and artifact hashes are supplied by
-  the verifier caller rather than copied from the evidence under review. Raw argv is not serialized
-  into evidence.
+  gate-to-command bindings, trusted statuses and messages for every gate, source and engine
+  revisions, profile/toolchain facts, permission snapshot, test counts, and artifact hashes are
+  supplied by the verifier caller rather than copied from the evidence under review. Raw argv is
+  not serialized into evidence.
 - Every recorded command has a bounded terminal exit code. Every action in a multi-permission
   command is evaluated independently, every command is accounted for by a gate, and gates must
   carry the same complete action set.
+- Untrusted evidence JSON enters through bounded `EvidenceLoader`; the complete evidence model is
+  encode-only so callers cannot bypass duplicate-key, unknown-property, or explicit-null checks by
+  decoding it directly. String validation examines at most one scalar beyond the configured
+  4,096-scalar limit before failing closed.
 - `SKIPPED` aggregates to `BLOCKED`, `NOT_RUN_BY_USER_DECISION` to `NEEDS_OWNER_DECISION`, and a
   claimed verdict inconsistent with the gate set becomes `BYPASSED`.
 - `READY_WITH_ACCEPTED_RISK` is represented but is not automatically derived; ownership and

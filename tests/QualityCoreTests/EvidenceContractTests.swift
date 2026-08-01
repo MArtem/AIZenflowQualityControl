@@ -180,7 +180,8 @@ struct EvidenceContractTests {
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
                         actions: [.testModification],
-                        status: .pass
+                        status: .pass,
+                        message: "Tests passed."
                     )
                 ],
                 artifacts: [:]
@@ -229,7 +230,8 @@ struct EvidenceContractTests {
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
                         actions: [.localTestExecution],
-                        status: .pass
+                        status: .pass,
+                        message: "Tests passed."
                     )
                 ],
                 artifacts: [:]
@@ -278,7 +280,8 @@ struct EvidenceContractTests {
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
                         actions: [.localTestExecution],
-                        status: .pass
+                        status: .pass,
+                        message: "Tests passed."
                     )
                 ],
                 userAuthorizedActions: [.localTestExecution],
@@ -330,7 +333,8 @@ struct EvidenceContractTests {
                 "QC.UI_TESTS": EvidenceGateExpectation(
                     commandID: "ui-tests",
                     actions: Set(actions),
-                    status: .pass
+                    status: .pass,
+                    message: "UI tests passed."
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -381,7 +385,8 @@ struct EvidenceContractTests {
                     "QC.TESTS": EvidenceGateExpectation(
                         commandID: "tests",
                         actions: [.localTestExecution],
-                        status: .pass
+                        status: .pass,
+                        message: "Tests passed."
                     )
                 ],
                 artifacts: [:]
@@ -460,7 +465,8 @@ struct EvidenceContractTests {
                 "QC.TESTS": EvidenceGateExpectation(
                     commandID: "tests",
                     actions: [.localTestExecution],
-                    status: .pass
+                    status: .pass,
+                    message: "Tests passed."
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -519,11 +525,16 @@ struct EvidenceContractTests {
                 )
             ],
             gates: [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass),
+                "QC.STATIC": EvidenceGateExpectation(
+                    commandID: "static",
+                    status: .pass,
+                    message: "Static passed."
+                ),
                 "QC.TESTS": EvidenceGateExpectation(
                     commandID: "tests",
                     actions: [.localTestExecution],
-                    status: .pass
+                    status: .pass,
+                    message: "Tests passed."
                 )
             ],
             userAuthorizedActions: [.localTestExecution],
@@ -573,7 +584,11 @@ struct EvidenceContractTests {
                 )
             ],
             gates: [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass)
+                "QC.STATIC": EvidenceGateExpectation(
+                    commandID: "static",
+                    status: .pass,
+                    message: "Static passed."
+                )
             ],
             artifacts: [:]
         )
@@ -615,10 +630,15 @@ struct EvidenceContractTests {
         )
         let expected = expectation(
             gates: [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass),
+                "QC.STATIC": EvidenceGateExpectation(
+                    commandID: "static",
+                    status: .pass,
+                    message: "Static passed."
+                ),
                 "QC.UI_TESTS": EvidenceGateExpectation(
                     actions: [.uiTests],
-                    status: .skipped
+                    status: .skipped,
+                    message: "UI tests were declared not applicable."
                 )
             ]
         )
@@ -637,11 +657,31 @@ struct EvidenceContractTests {
                 gates: [
                     "QC.STATIC": EvidenceGateExpectation(
                         commandID: "static",
-                        status: .blocked
+                        status: .blocked,
+                        message: "Static checks passed."
                     )
                 ]
             )
         )
+
+        #expect(result.verdict == .bypassed)
+        #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
+    }
+
+    @Test("A gate cannot replace its trusted message")
+    func forgedGateMessageIsBypassed() {
+        let evidence = validEvidence(
+            gates: [
+                EvidenceGate(
+                    id: "QC.STATIC",
+                    status: .pass,
+                    message: "Security and UI checks also passed.",
+                    commandID: "static"
+                )
+            ]
+        )
+
+        let result = EvidenceVerifier.verify(evidence, expected: expectation())
 
         #expect(result.verdict == .bypassed)
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.GATE_SET_MISMATCH"))
@@ -653,10 +693,15 @@ struct EvidenceContractTests {
             validEvidence(),
             expected: expectation(
                 gates: [
-                    "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass),
+                    "QC.STATIC": EvidenceGateExpectation(
+                        commandID: "static",
+                        status: .pass,
+                        message: "Static checks passed."
+                    ),
                     "QC.TESTS": EvidenceGateExpectation(
                         actions: [.localTestExecution],
-                        status: .notRunByUserDecision
+                        status: .notRunByUserDecision,
+                        message: "Tests were not run by user decision."
                     )
                 ]
             )
@@ -815,7 +860,10 @@ struct EvidenceContractTests {
             evidence,
             expected: expectation(
                 gates: [
-                    "QC.TESTS": EvidenceGateExpectation(status: .skipped)
+                    "QC.TESTS": EvidenceGateExpectation(
+                        status: .skipped,
+                        message: "Job did not run."
+                    )
                 ]
             )
         )
@@ -824,11 +872,11 @@ struct EvidenceContractTests {
         #expect(result.issues.map(\.code).contains("QC.EVIDENCE.CLAIMED_VERDICT_MISMATCH"))
     }
 
-    @Test("Evidence has a stable Codable representation")
+    @Test("Evidence has a stable encoded representation and bounded loader")
     func evidenceRoundTrip() throws {
         let evidence = validEvidence()
         let encoded = try JSONEncoder().encode(evidence)
-        let decoded = try JSONDecoder().decode(QualityEvidence.self, from: encoded)
+        let decoded = try EvidenceLoader.decode(encoded)
         let object = try #require(
             try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
         )
@@ -843,14 +891,52 @@ struct EvidenceContractTests {
         #expect(command["commandSHA256"] as? String == staticCommandHash)
     }
 
+    @Test("Evidence loader rejects schema-invalid properties, null optionals, and duplicate keys")
+    func strictEvidenceDecodingRejectsSchemaInvalidJSON() throws {
+        let encoded = try JSONEncoder().encode(validEvidence())
+        let baseObject = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+
+        var unknownTopLevel = baseObject
+        unknownTopLevel["unexpected"] = true
+
+        var unknownNested = baseObject
+        var commands = try #require(unknownNested["commands"] as? [[String: Any]])
+        commands[0]["unexpected"] = true
+        unknownNested["commands"] = commands
+
+        var nullOptional = baseObject
+        nullOptional["testCounts"] = NSNull()
+
+        for object in [unknownTopLevel, unknownNested, nullOptional] {
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            #expect(throws: DecodingError.self) {
+                try EvidenceLoader.decode(data)
+            }
+        }
+
+        let encodedString = try #require(String(data: encoded, encoding: .utf8))
+        let openingBrace = try #require(encodedString.firstIndex(of: "{"))
+        let duplicateSchemaVersion = encodedString.replacingCharacters(
+            in: openingBrace...openingBrace,
+            with: #"{"schemaVersion":1,"#
+        )
+        #expect(throws: Error.self) {
+            try EvidenceLoader.decode(Data(duplicateSchemaVersion.utf8))
+        }
+    }
+
     @Test("Runtime string limits use schema Unicode-length units")
     func unicodeStringBoundsMatchSchema() {
+        let acceptedMessage = String(repeating: "é", count: 4_096)
+        let rejectedMessage = String(repeating: "é", count: 4_097)
         let accepted = validEvidence(
             gates: [
                 EvidenceGate(
                     id: "QC.STATIC",
                     status: .pass,
-                    message: String(repeating: "é", count: 4_096),
+                    message: acceptedMessage,
                     commandID: "static"
                 )
             ]
@@ -860,14 +946,36 @@ struct EvidenceContractTests {
                 EvidenceGate(
                     id: "QC.STATIC",
                     status: .pass,
-                    message: String(repeating: "é", count: 4_097),
+                    message: rejectedMessage,
                     commandID: "static"
                 )
             ]
         )
 
-        let acceptedResult = EvidenceVerifier.verify(accepted, expected: expectation())
-        let rejectedResult = EvidenceVerifier.verify(rejected, expected: expectation())
+        let acceptedResult = EvidenceVerifier.verify(
+            accepted,
+            expected: expectation(
+                gates: [
+                    "QC.STATIC": EvidenceGateExpectation(
+                        commandID: "static",
+                        status: .pass,
+                        message: acceptedMessage
+                    )
+                ]
+            )
+        )
+        let rejectedResult = EvidenceVerifier.verify(
+            rejected,
+            expected: expectation(
+                gates: [
+                    "QC.STATIC": EvidenceGateExpectation(
+                        commandID: "static",
+                        status: .pass,
+                        message: rejectedMessage
+                    )
+                ]
+            )
+        )
 
         #expect(acceptedResult.verdict == .ready)
         #expect(acceptedResult.issues.isEmpty)
@@ -894,9 +1002,40 @@ struct EvidenceContractTests {
         let commandSchema = try #require(commandCollection["items"] as? [String: Any])
         let commandProperties = try #require(commandSchema["properties"] as? [String: Any])
         let commandRequired = try #require(commandSchema["required"] as? [String])
+        let commandConditions = try #require(commandSchema["allOf"] as? [[String: Any]])
         #expect(commandProperties["commandLine"] == nil)
         #expect(commandProperties["commandSHA256"] != nil)
         #expect(commandRequired.contains("commandSHA256"))
+        #expect(commandConditions.count == 2)
+
+        let actionlessIf = try #require(commandConditions[0]["if"] as? [String: Any])
+        let actionlessProperties = try #require(actionlessIf["properties"] as? [String: Any])
+        let actionlessActions = try #require(actionlessProperties["actions"] as? [String: Any])
+        let actionlessThen = try #require(commandConditions[0]["then"] as? [String: Any])
+        let actionlessThenProperties = try #require(
+            actionlessThen["properties"] as? [String: Any]
+        )
+        let actionlessAuthorization = try #require(
+            actionlessThenProperties["authorization"] as? [String: Any]
+        )
+        #expect(actionlessActions["maxItems"] as? Int == 0)
+        #expect(actionlessAuthorization["const"] as? String == "NOT_REQUIRED")
+
+        let controlledIf = try #require(commandConditions[1]["if"] as? [String: Any])
+        let controlledProperties = try #require(controlledIf["properties"] as? [String: Any])
+        let controlledActions = try #require(controlledProperties["actions"] as? [String: Any])
+        let controlledThen = try #require(commandConditions[1]["then"] as? [String: Any])
+        let controlledThenProperties = try #require(
+            controlledThen["properties"] as? [String: Any]
+        )
+        let controlledAuthorization = try #require(
+            controlledThenProperties["authorization"] as? [String: Any]
+        )
+        let controlledAuthorizations = try #require(
+            controlledAuthorization["enum"] as? [String]
+        )
+        #expect(controlledActions["minItems"] as? Int == 1)
+        #expect(Set(controlledAuthorizations) == Set(["PROFILE", "USER"]))
 
         let gateCollection = try #require(properties["gates"] as? [String: Any])
         let gateSchema = try #require(gateCollection["items"] as? [String: Any])
@@ -1049,7 +1188,11 @@ struct EvidenceContractTests {
                 )
             ],
             gatesByID: gates ?? [
-                "QC.STATIC": EvidenceGateExpectation(commandID: "static", status: .pass)
+                "QC.STATIC": EvidenceGateExpectation(
+                    commandID: "static",
+                    status: .pass,
+                    message: "Static checks passed."
+                )
             ],
             userAuthorizedActions: userAuthorizedActions,
             testCounts: testCounts,
