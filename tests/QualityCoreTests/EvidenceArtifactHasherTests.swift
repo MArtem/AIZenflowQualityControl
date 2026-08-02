@@ -351,6 +351,37 @@ struct EvidenceArtifactHasherTests {
         }
     }
 
+    @Test("A same-size in-place rewrite between hash passes fails closed")
+    func rejectsInPlaceRewriteBetweenHashPasses() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("old".utf8), at: "artifact.json")
+
+        let artifactURL = fixture.directory.appendingPathComponent("artifact.json")
+        let writerDescriptor = Darwin.open(
+            artifactURL.path,
+            O_WRONLY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(writerDescriptor >= 0)
+        defer { Darwin.close(writerDescriptor) }
+
+        expectError(.artifactChangedDuringRead) {
+            try EvidenceArtifactHasher.hashInWorker(
+                relativePaths: ["artifact.json"],
+                repositoryRoot: fixture.directory,
+                beforeStabilityRehash: { _, _ in
+                    try #require(lseek(writerDescriptor, 0, SEEK_SET) == 0)
+                    let replacementBytes = Array("new".utf8)
+                    let writtenByteCount = replacementBytes.withUnsafeBytes { bytes in
+                        Darwin.write(writerDescriptor, bytes.baseAddress, bytes.count)
+                    }
+                    try #require(writtenByteCount == replacementBytes.count)
+                },
+                beforeFinalPathValidation: nil
+            )
+        }
+    }
+
     private func expectSuccessfulRemoval(of fixture: TemporaryProfile) {
         do {
             try fixture.remove()

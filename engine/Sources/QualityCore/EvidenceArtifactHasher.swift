@@ -46,6 +46,20 @@ package enum EvidenceArtifactHasher {
         repositoryRoot: URL,
         beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
     ) throws -> [EvidenceArtifact] {
+        try hashInWorker(
+            relativePaths: relativePaths,
+            repositoryRoot: repositoryRoot,
+            beforeStabilityRehash: nil,
+            beforeFinalPathValidation: beforeFinalPathValidation
+        )
+    }
+
+    static func hashInWorker(
+        relativePaths: [String],
+        repositoryRoot: URL,
+        beforeStabilityRehash: ((String, Int32) throws -> Void)?,
+        beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
+    ) throws -> [EvidenceArtifact] {
         let validatedPaths = try validate(relativePaths: relativePaths)
         let sortedPaths = validatedPaths.sorted { $0.0 < $1.0 }
 
@@ -73,7 +87,12 @@ package enum EvidenceArtifactHasher {
                 Darwin.close(artifact.parentDescriptor)
             }
 
-            let hash = try sha256(descriptor: artifact.descriptor, path: path)
+            let hash = try stableSHA256(
+                descriptor: artifact.descriptor,
+                path: path
+            ) {
+                try beforeStabilityRehash?(path, artifact.descriptor)
+            }
             try beforeFinalPathValidation?(
                 path,
                 rootDescriptor,
@@ -245,6 +264,24 @@ package enum EvidenceArtifactHasher {
             digest: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
             status: finalStatus
         )
+    }
+
+    private static func stableSHA256(
+        descriptor: Int32,
+        path: String,
+        beforeSecondPass: () throws -> Void
+    ) throws -> ArtifactHash {
+        let firstHash = try sha256(descriptor: descriptor, path: path)
+        try beforeSecondPass()
+        guard lseek(descriptor, 0, SEEK_SET) == 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactReadFailure, path: path)
+        }
+        let secondHash = try sha256(descriptor: descriptor, path: path)
+        guard firstHash.digest == secondHash.digest,
+              sameIdentityAndContents(firstHash.status, secondHash.status) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+        return secondHash
     }
 
     private static func validateCurrentEntry(
