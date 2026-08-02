@@ -62,7 +62,7 @@ package enum EvidenceArtifactHasher {
         }
         defer { Darwin.close(rootDescriptor) }
 
-        let artifacts = try sortedPaths.map { path, components in
+        let hashedArtifacts = try sortedPaths.map { path, components in
             let artifact = try openArtifact(
                 components: components,
                 path: path,
@@ -87,16 +87,28 @@ package enum EvidenceArtifactHasher {
                 rootDescriptor: rootDescriptor
             )
 
-            return EvidenceArtifact(
-                path: path,
-                sha256: hash.digest
+            return HashedArtifact(
+                artifact: EvidenceArtifact(
+                    path: path,
+                    sha256: hash.digest
+                ),
+                components: components,
+                status: hash.status
+            )
+        }
+        for artifact in hashedArtifacts {
+            try validateCurrentPath(
+                components: artifact.components,
+                hashedStatus: artifact.status,
+                path: artifact.artifact.path,
+                rootDescriptor: rootDescriptor
             )
         }
         try validateCurrentRepositoryRoot(
             at: repositoryRoot,
             rootDescriptor: rootDescriptor
         )
-        return artifacts
+        return hashedArtifacts.map(\.artifact)
     }
 
     package static func validate(
@@ -248,6 +260,20 @@ package enum EvidenceArtifactHasher {
             throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
         }
 
+        try validateCurrentPath(
+            components: components,
+            hashedStatus: hashedStatus,
+            path: path,
+            rootDescriptor: rootDescriptor
+        )
+    }
+
+    private static func validateCurrentPath(
+        components: [String],
+        hashedStatus: stat,
+        path: String,
+        rootDescriptor: Int32
+    ) throws {
         let currentArtifact: OpenArtifact
         do {
             currentArtifact = try openArtifact(
@@ -313,6 +339,12 @@ package enum EvidenceArtifactHasher {
 
     private struct ArtifactHash {
         let digest: String
+        let status: stat
+    }
+
+    private struct HashedArtifact {
+        let artifact: EvidenceArtifact
+        let components: [String]
         let status: stat
     }
 }

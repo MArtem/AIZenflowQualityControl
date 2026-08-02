@@ -312,6 +312,45 @@ struct EvidenceArtifactHasherTests {
         }
     }
 
+    @Test("Replacing an earlier artifact during a later hash fails closed")
+    func rejectsEarlierArtifactReplacement() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("old".utf8), at: "a.json")
+        try fixture.write(Data("later".utf8), at: "b.json")
+
+        expectError(.artifactChangedDuringRead) {
+            try EvidenceArtifactHasher.hashInWorker(
+                relativePaths: ["a.json", "b.json"],
+                repositoryRoot: fixture.directory
+            ) { path, rootDescriptor, _ in
+                guard path == "b.json" else {
+                    return
+                }
+                let replacementDescriptor = Darwin.openat(
+                    rootDescriptor,
+                    "a-replacement.json",
+                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+                    S_IRUSR | S_IWUSR
+                )
+                try #require(replacementDescriptor >= 0)
+                defer { Darwin.close(replacementDescriptor) }
+                try #require(
+                    "a-replacement.json".withCString { replacementName in
+                        "a.json".withCString { artifactName in
+                            renameat(
+                                rootDescriptor,
+                                replacementName,
+                                rootDescriptor,
+                                artifactName
+                            )
+                        }
+                    } == 0
+                )
+            }
+        }
+    }
+
     private func expectSuccessfulRemoval(of fixture: TemporaryProfile) {
         do {
             try fixture.remove()
