@@ -8,7 +8,7 @@ struct EvidenceArtifactHashWorkerBoundaryTests {
     func emptyRequestNeedsNoWorker() throws {
         let artifacts = try EvidenceArtifactHashWorkerBoundary.hash(
             relativePaths: [],
-            repositoryRoot: URL(fileURLWithPath: "/missing-root"),
+            snapshotRoot: URL(fileURLWithPath: "/missing-root"),
             executableURL: URL(fileURLWithPath: "/missing-worker")
         )
 
@@ -21,7 +21,7 @@ struct EvidenceArtifactHashWorkerBoundaryTests {
             expectError(.workerFailure) {
                 try EvidenceArtifactHashWorkerBoundary.hash(
                     relativePaths: ["report.json"],
-                    repositoryRoot: URL(fileURLWithPath: "/missing-root"),
+                    snapshotRoot: URL(fileURLWithPath: "/missing-root"),
                     executableURL: URL(fileURLWithPath: "/missing-worker"),
                     timeoutSeconds: timeout
                 )
@@ -109,6 +109,22 @@ struct EvidenceArtifactHashWorkerBoundaryTests {
                             EvidenceArtifactHashingError(
                                 code: .artifactTooLarge,
                                 path: "report.json"
+                            )
+                        )
+                    ),
+                    terminationStatus: 1
+                ),
+                expectedPaths: ["report.json"]
+            )
+        }
+
+        expectError(.repositorySnapshotRequired) {
+            try EvidenceArtifactHashWorkerBoundary.artifacts(
+                for: result(
+                    output: try encoded(
+                        .failure(
+                            EvidenceArtifactHashingError(
+                                code: .repositorySnapshotRequired
                             )
                         )
                     ),

@@ -5,6 +5,22 @@ import Testing
 
 @Suite("Evidence artifact hashing")
 struct EvidenceArtifactHasherTests {
+    @Test("Production hashing requires a read-only filesystem snapshot")
+    func requiresReadOnlySnapshot() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("report".utf8), at: "report.json")
+
+        expectError(.repositorySnapshotRequired) {
+            try EvidenceArtifactHasher.hashSnapshotInWorker(
+                relativePaths: ["report.json"],
+                repositoryRoot: fixture.directory
+            )
+        }
+        #expect(EvidenceArtifactHasher.isReadOnlyFileSystem(flags: UInt32(MNT_RDONLY)))
+        #expect(!EvidenceArtifactHasher.isReadOnlyFileSystem(flags: 0))
+    }
+
     @Test("An empty artifact set needs no filesystem access")
     func acceptsEmptyArtifactSet() throws {
         let artifacts = try EvidenceArtifactHasher.hashInWorker(

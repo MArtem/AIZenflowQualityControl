@@ -34,7 +34,7 @@ package enum EvidenceArtifactHashWorkerBoundary {
 
     package static func hash(
         relativePaths: [String],
-        repositoryRoot: URL,
+        snapshotRoot: URL,
         executableURL: URL,
         timeoutSeconds: TimeInterval = hardTimeoutSeconds
     ) throws -> [EvidenceArtifact] {
@@ -55,7 +55,7 @@ package enum EvidenceArtifactHashWorkerBoundary {
         process.executableURL = executableURL
         process.arguments = [
             "__artifact-hash-worker",
-            "--repository-root", repositoryRoot.path
+            "--snapshot-root", snapshotRoot.path
         ] + expectedPaths.flatMap { ["--artifact", $0] }
         var environment = ProcessInfo.processInfo.environment
         environment[workerEnvironmentKey] = "1"
@@ -123,7 +123,8 @@ package enum EvidenceArtifactHashWorkerBoundary {
         expectedPaths: [String]
     ) -> Bool {
         switch code {
-        case .repositoryRootUnavailable:
+        case .repositoryRootUnavailable,
+             .repositorySnapshotRequired:
             return path == nil
         case .artifactChangedDuringRead:
             return path == nil || (path.map(expectedPaths.contains) ?? false)

@@ -85,14 +85,14 @@ private func emitArtifactHashWorkerResponse(
 
 private func parseArtifactWorkerOptions(
     _ arguments: ArraySlice<String>
-) throws -> (repositoryRoot: String, artifacts: [String]) {
+) throws -> (snapshotRoot: String, artifacts: [String]) {
     let values = Array(arguments)
     guard values.count >= 2,
-          values[0] == "--repository-root" else {
-        throw CLIError.message("Artifact worker repository root is missing.")
+          values[0] == "--snapshot-root" else {
+        throw CLIError.message("Artifact worker snapshot root is missing.")
     }
 
-    let repositoryRoot = values[1]
+    let snapshotRoot = values[1]
     var artifacts: [String] = []
     var index = 2
     while index < values.count {
@@ -105,7 +105,7 @@ private func parseArtifactWorkerOptions(
         }
         index += 2
     }
-    return (repositoryRoot, artifacts)
+    return (snapshotRoot, artifacts)
 }
 
 private let staticWorkerEnvironmentKey = "AIZENFLOW_QUALITY_INTERNAL_STATIC_WORKER"
@@ -302,9 +302,9 @@ do {
         }
         do {
             let options = try parseArtifactWorkerOptions(arguments.dropFirst(2))
-            let artifacts = try EvidenceArtifactHasher.hashInWorker(
+            let artifacts = try EvidenceArtifactHasher.hashSnapshotInWorker(
                 relativePaths: options.artifacts,
-                repositoryRoot: fileURL(options.repositoryRoot)
+                repositoryRoot: fileURL(options.snapshotRoot)
             )
             withExtendedLifetime(parentExitMonitor) {
                 emitArtifactHashWorkerResponse(.success(artifacts), exitCode: 0)
