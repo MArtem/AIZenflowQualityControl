@@ -7,7 +7,7 @@ import Testing
 struct EvidenceArtifactHasherTests {
     @Test("An empty artifact set needs no filesystem access")
     func acceptsEmptyArtifactSet() throws {
-        let artifacts = try EvidenceArtifactHasher.hash(
+        let artifacts = try EvidenceArtifactHasher.hashInWorker(
             relativePaths: [],
             repositoryRoot: URL(
                 fileURLWithPath: ".quality-control-cache/missing-evidence-root",
@@ -25,7 +25,7 @@ struct EvidenceArtifactHasherTests {
         try fixture.write(Data("abc".utf8), at: "reports/z.json")
         try fixture.write(Data(), at: "reports/a.json")
 
-        let artifacts = try EvidenceArtifactHasher.hash(
+        let artifacts = try EvidenceArtifactHasher.hashInWorker(
             relativePaths: ["reports/z.json", "reports/a.json"],
             repositoryRoot: fixture.directory
         )
@@ -47,7 +47,9 @@ struct EvidenceArtifactHasherTests {
             "reports//file",
             "./file",
             "~report",
-            "~/report"
+            "~/report",
+            " ",
+            "\u{200B}"
         ]
     )
     func rejectsUnsafePath(_ path: String) throws {
@@ -55,7 +57,7 @@ struct EvidenceArtifactHasherTests {
         defer { expectSuccessfulRemoval(of: fixture) }
 
         expectError(.invalidPath) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: [path],
                 repositoryRoot: fixture.directory
             )
@@ -68,7 +70,7 @@ struct EvidenceArtifactHasherTests {
         defer { expectSuccessfulRemoval(of: fixture) }
 
         expectError(.invalidPath) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: [String(repeating: "a", count: 1_025)],
                 repositoryRoot: fixture.directory
             )
@@ -81,13 +83,13 @@ struct EvidenceArtifactHasherTests {
         defer { expectSuccessfulRemoval(of: fixture) }
 
         expectError(.duplicatePath) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: ["report.json", "report.json"],
                 repositoryRoot: fixture.directory
             )
         }
         expectError(.tooManyArtifacts) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: (0...EvidenceArtifactHasher.maximumArtifactCount).map {
                     "report-\($0).json"
                 },
@@ -106,19 +108,19 @@ struct EvidenceArtifactHasherTests {
         try fixture.createDirectory(at: "artifact-directory")
 
         expectError(.artifactUnavailable) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: ["artifact-link"],
                 repositoryRoot: fixture.directory
             )
         }
         expectError(.artifactNotRegularFile) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: ["artifact-directory"],
                 repositoryRoot: fixture.directory
             )
         }
         expectError(.artifactUnavailable) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: ["directory-link/outside.txt"],
                 repositoryRoot: fixture.directory
             )
@@ -143,7 +145,7 @@ struct EvidenceArtifactHasherTests {
         )
 
         expectError(.artifactTooLarge) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: ["oversized.bin"],
                 repositoryRoot: fixture.directory
             )
@@ -156,10 +158,10 @@ struct EvidenceArtifactHasherTests {
         defer { expectSuccessfulRemoval(of: fixture) }
         try fixture.write(Data("report".utf8), at: "reports/output.json")
 
-        _ = try EvidenceArtifactHasher.hash(
+        _ = try EvidenceArtifactHasher.hashInWorker(
             relativePaths: ["reports/output.json"],
             repositoryRoot: fixture.directory
-        ) { _, parentDescriptor in
+        ) { _, _, parentDescriptor in
             let flags = Darwin.fcntl(parentDescriptor, F_GETFD)
             try #require(flags >= 0)
             #expect(flags & FD_CLOEXEC == FD_CLOEXEC)
@@ -173,10 +175,10 @@ struct EvidenceArtifactHasherTests {
         try fixture.write(Data("old".utf8), at: "reports/output.json")
 
         expectError(.artifactChangedDuringRead) {
-            try EvidenceArtifactHasher.hash(
+            try EvidenceArtifactHasher.hashInWorker(
                 relativePaths: ["reports/output.json"],
                 repositoryRoot: fixture.directory
-            ) { _, parentDescriptor in
+            ) { _, _, parentDescriptor in
                 let replacementDescriptor = Darwin.openat(
                     parentDescriptor,
                     "replacement.json",
@@ -204,6 +206,58 @@ struct EvidenceArtifactHasherTests {
                         }
                     } == 0
                 )
+            }
+        }
+    }
+
+    @Test("Replacing an intermediate directory during hashing fails closed")
+    func rejectsIntermediateDirectoryReplacement() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("old".utf8), at: "reports/output.json")
+
+        var replacedDirectory = false
+        expectError(.artifactChangedDuringRead) {
+            try EvidenceArtifactHasher.hashInWorker(
+                relativePaths: ["reports/output.json"],
+                repositoryRoot: fixture.directory
+            ) { _, rootDescriptor, _ in
+                try #require(
+                    renameat(rootDescriptor, "reports", rootDescriptor, "old-reports") == 0
+                )
+                replacedDirectory = true
+                try #require(
+                    mkdirat(rootDescriptor, "reports", S_IRWXU) == 0
+                )
+                let reportsDescriptor = Darwin.openat(
+                    rootDescriptor,
+                    "reports",
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+                try #require(reportsDescriptor >= 0)
+                defer { Darwin.close(reportsDescriptor) }
+                let replacementDescriptor = Darwin.openat(
+                    reportsDescriptor,
+                    "output.json",
+                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+                    S_IRUSR | S_IWUSR
+                )
+                try #require(replacementDescriptor >= 0)
+                Darwin.close(replacementDescriptor)
+            }
+        }
+
+        if replacedDirectory {
+            do {
+                try FileManager.default.removeItem(
+                    at: fixture.directory.appendingPathComponent("reports")
+                )
+                try FileManager.default.moveItem(
+                    at: fixture.directory.appendingPathComponent("old-reports"),
+                    to: fixture.directory.appendingPathComponent("reports")
+                )
+            } catch {
+                Issue.record("Intermediate-directory fixture restoration failed: \(error)")
             }
         }
     }

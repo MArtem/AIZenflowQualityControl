@@ -1176,7 +1176,7 @@ public enum EvidenceVerifier {
         }
     }
 
-    private static func isBoundedNonEmptyString(_ value: String) -> Bool {
+    package static func isBoundedNonEmptyString(_ value: String) -> Bool {
         var scalarCount = 0
         var containsNonWhitespace = false
 

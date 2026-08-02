@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 
 public struct EvidenceArtifactHashingError: Error, Equatable, Sendable {
-    public enum Code: String, Sendable {
+    public enum Code: String, Codable, Sendable {
         case tooManyArtifacts = "TOO_MANY_ARTIFACTS"
         case duplicatePath = "DUPLICATE_PATH"
         case invalidPath = "INVALID_PATH"
@@ -13,6 +13,8 @@ public struct EvidenceArtifactHashingError: Error, Equatable, Sendable {
         case artifactTooLarge = "ARTIFACT_TOO_LARGE"
         case artifactReadFailure = "ARTIFACT_READ_FAILURE"
         case artifactChangedDuringRead = "ARTIFACT_CHANGED_DURING_READ"
+        case deadlineExceeded = "DEADLINE_EXCEEDED"
+        case workerFailure = "WORKER_FAILURE"
     }
 
     public let code: Code
@@ -24,41 +26,27 @@ public struct EvidenceArtifactHashingError: Error, Equatable, Sendable {
     }
 }
 
-public enum EvidenceArtifactHasher {
-    public static let maximumArtifactCount = 64
-    public static let maximumArtifactBytes = 64 * 1_024 * 1_024
+package enum EvidenceArtifactHasher {
+    package static let maximumArtifactCount = 64
+    package static let maximumArtifactBytes = 64 * 1_024 * 1_024
 
-    public static func hash(
+    package static func hashInWorker(
         relativePaths: [String],
         repositoryRoot: URL
     ) throws -> [EvidenceArtifact] {
-        try hash(
+        try hashInWorker(
             relativePaths: relativePaths,
             repositoryRoot: repositoryRoot,
             beforeFinalPathValidation: nil
         )
     }
 
-    static func hash(
+    static func hashInWorker(
         relativePaths: [String],
         repositoryRoot: URL,
-        beforeFinalPathValidation: ((String, Int32) throws -> Void)?
+        beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
     ) throws -> [EvidenceArtifact] {
-        guard relativePaths.count <= maximumArtifactCount else {
-            throw EvidenceArtifactHashingError(code: .tooManyArtifacts)
-        }
-        let validatedPaths = try relativePaths.map { path -> (String, [String]) in
-            guard path.unicodeScalars.prefix(1_025).count <= 1_024 else {
-                throw EvidenceArtifactHashingError(code: .invalidPath)
-            }
-            guard let components = validatedComponents(for: path) else {
-                throw EvidenceArtifactHashingError(code: .invalidPath, path: path)
-            }
-            return (path, components)
-        }
-        guard Set(validatedPaths.map(\.0)).count == validatedPaths.count else {
-            throw EvidenceArtifactHashingError(code: .duplicatePath)
-        }
+        let validatedPaths = try validate(relativePaths: relativePaths)
         let sortedPaths = validatedPaths.sorted { $0.0 < $1.0 }
 
         guard !sortedPaths.isEmpty else {
@@ -86,11 +74,17 @@ public enum EvidenceArtifactHasher {
             }
 
             let hash = try sha256(descriptor: artifact.descriptor, path: path)
-            try beforeFinalPathValidation?(path, artifact.parentDescriptor)
+            try beforeFinalPathValidation?(
+                path,
+                rootDescriptor,
+                artifact.parentDescriptor
+            )
             try validateCurrentEntry(
                 artifact,
+                components: components,
                 hashedStatus: hash.status,
-                path: path
+                path: path,
+                rootDescriptor: rootDescriptor
             )
 
             return EvidenceArtifact(
@@ -98,6 +92,25 @@ public enum EvidenceArtifactHasher {
                 sha256: hash.digest
             )
         }
+    }
+
+    package static func validate(
+        relativePaths: [String]
+    ) throws -> [(String, [String])] {
+        guard relativePaths.count <= maximumArtifactCount else {
+            throw EvidenceArtifactHashingError(code: .tooManyArtifacts)
+        }
+        let validatedPaths = try relativePaths.map { path -> (String, [String]) in
+            guard EvidenceVerifier.isBoundedNonEmptyString(path),
+                  let components = validatedComponents(for: path) else {
+                throw EvidenceArtifactHashingError(code: .invalidPath, path: path)
+            }
+            return (path, components)
+        }
+        guard Set(validatedPaths.map(\.0)).count == validatedPaths.count else {
+            throw EvidenceArtifactHashingError(code: .duplicatePath)
+        }
+        return validatedPaths
     }
 
     private static func validatedComponents(for path: String) -> [String]? {
@@ -219,23 +232,35 @@ public enum EvidenceArtifactHasher {
 
     private static func validateCurrentEntry(
         _ artifact: OpenArtifact,
+        components: [String],
         hashedStatus: stat,
-        path: String
+        path: String,
+        rootDescriptor: Int32
     ) throws {
         var descriptorStatus = stat()
-        var entryStatus = stat()
-        let entryStatusResult = artifact.leafName.withCString {
-            Darwin.fstatat(
-                artifact.parentDescriptor,
-                $0,
-                &entryStatus,
-                AT_SYMLINK_NOFOLLOW
-            )
-        }
         guard fstat(artifact.descriptor, &descriptorStatus) == 0,
-              entryStatusResult == 0,
-              sameIdentityAndContents(hashedStatus, descriptorStatus),
-              sameIdentityAndContents(hashedStatus, entryStatus) else {
+              sameIdentityAndContents(hashedStatus, descriptorStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+
+        let currentArtifact: OpenArtifact
+        do {
+            currentArtifact = try openArtifact(
+                components: components,
+                path: path,
+                rootDescriptor: rootDescriptor
+            )
+        } catch {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+        defer {
+            Darwin.close(currentArtifact.descriptor)
+            Darwin.close(currentArtifact.parentDescriptor)
+        }
+
+        var currentStatus = stat()
+        guard fstat(currentArtifact.descriptor, &currentStatus) == 0,
+              sameIdentityAndContents(hashedStatus, currentStatus) else {
             throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
         }
     }

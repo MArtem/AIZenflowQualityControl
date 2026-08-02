@@ -69,6 +69,45 @@ private func emit(_ report: QualityReport) -> Never {
     }
 }
 
+private func emitArtifactHashWorkerResponse(
+    _ response: EvidenceArtifactHashWorkerResponse,
+    exitCode: Int32
+) -> Never {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    guard var data = try? encoder.encode(response) else {
+        exit(2)
+    }
+    data.append(0x0A)
+    FileHandle.standardOutput.write(data)
+    exit(exitCode)
+}
+
+private func parseArtifactWorkerOptions(
+    _ arguments: ArraySlice<String>
+) throws -> (repositoryRoot: String, artifacts: [String]) {
+    let values = Array(arguments)
+    guard values.count >= 2,
+          values[0] == "--repository-root" else {
+        throw CLIError.message("Artifact worker repository root is missing.")
+    }
+
+    let repositoryRoot = values[1]
+    var artifacts: [String] = []
+    var index = 2
+    while index < values.count {
+        guard values[index] == "--artifact", index + 1 < values.count else {
+            throw CLIError.message("Artifact worker arguments are malformed.")
+        }
+        artifacts.append(values[index + 1])
+        guard artifacts.count <= EvidenceArtifactHasher.maximumArtifactCount else {
+            throw EvidenceArtifactHashingError(code: .tooManyArtifacts)
+        }
+        index += 2
+    }
+    return (repositoryRoot, artifacts)
+}
+
 private let staticWorkerEnvironmentKey = "AIZENFLOW_QUALITY_INTERNAL_STATIC_WORKER"
 private let staticJobDeadlineEnvironmentKey = "QC_STATIC_JOB_DEADLINE_EPOCH_SECONDS"
 
@@ -241,6 +280,46 @@ do {
         )
         withExtendedLifetime(parentExitMonitor) {
             emit(report)
+        }
+
+    case "__artifact-hash-worker":
+        guard ProcessInfo.processInfo.environment[
+            EvidenceArtifactHashWorkerBoundary.workerEnvironmentKey
+        ] == "1",
+        let parentProcessIdentifier = trustedParentProcessIdentifier() else {
+            emitArtifactHashWorkerResponse(
+                .failure(EvidenceArtifactHashingError(code: .workerFailure)),
+                exitCode: 2
+            )
+        }
+        let parentExitMonitor = ProcessExitMonitor(
+            processIdentifier: parentProcessIdentifier
+        ) {
+            Darwin._exit(2)
+        }
+        guard getppid() == parentProcessIdentifier else {
+            Darwin._exit(2)
+        }
+        do {
+            let options = try parseArtifactWorkerOptions(arguments.dropFirst(2))
+            let artifacts = try EvidenceArtifactHasher.hashInWorker(
+                relativePaths: options.artifacts,
+                repositoryRoot: fileURL(options.repositoryRoot)
+            )
+            withExtendedLifetime(parentExitMonitor) {
+                emitArtifactHashWorkerResponse(.success(artifacts), exitCode: 0)
+            }
+        } catch let error as EvidenceArtifactHashingError {
+            withExtendedLifetime(parentExitMonitor) {
+                emitArtifactHashWorkerResponse(.failure(error), exitCode: 1)
+            }
+        } catch {
+            withExtendedLifetime(parentExitMonitor) {
+                emitArtifactHashWorkerResponse(
+                    .failure(EvidenceArtifactHashingError(code: .workerFailure)),
+                    exitCode: 2
+                )
+            }
         }
 
     default:
