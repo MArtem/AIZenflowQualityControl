@@ -62,6 +62,28 @@ struct EvidenceArtifactHashWorkerBoundaryTests {
                 expectedPaths: ["report.json"]
             )
         }
+
+        for failure in [
+            EvidenceArtifactHashWorkerResponse.failure(
+                EvidenceArtifactHashingError(code: .tooManyArtifacts)
+            ),
+            EvidenceArtifactHashWorkerResponse.failure(
+                EvidenceArtifactHashingError(
+                    code: .artifactTooLarge,
+                    path: "outside.json"
+                )
+            )
+        ] {
+            expectError(.workerFailure) {
+                try EvidenceArtifactHashWorkerBoundary.artifacts(
+                    for: result(
+                        output: try encoded(failure),
+                        terminationStatus: 1
+                    ),
+                    expectedPaths: ["report.json"]
+                )
+            }
+        }
     }
 
     @Test("Worker success and hashing failures preserve their contracts")

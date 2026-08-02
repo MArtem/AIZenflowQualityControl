@@ -262,6 +262,56 @@ struct EvidenceArtifactHasherTests {
         }
     }
 
+    @Test("Replacing the repository root during hashing fails closed")
+    func rejectsRepositoryRootReplacement() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("old".utf8), at: "reports/output.json")
+
+        let fixtureParent = fixture.directory.deletingLastPathComponent()
+        let fixtureParentDescriptor = Darwin.open(
+            fixtureParent.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        try #require(fixtureParentDescriptor >= 0)
+        defer { Darwin.close(fixtureParentDescriptor) }
+
+        let fixtureName = fixture.directory.lastPathComponent
+        let displacedName = "\(fixtureName)-displaced"
+        var replacedRoot = false
+        expectError(.artifactChangedDuringRead) {
+            try EvidenceArtifactHasher.hashInWorker(
+                relativePaths: ["reports/output.json"],
+                repositoryRoot: fixture.directory
+            ) { _, _, _ in
+                try #require(
+                    renameat(
+                        fixtureParentDescriptor,
+                        fixtureName,
+                        fixtureParentDescriptor,
+                        displacedName
+                    ) == 0
+                )
+                replacedRoot = true
+                try #require(
+                    mkdirat(fixtureParentDescriptor, fixtureName, S_IRWXU) == 0
+                )
+            }
+        }
+
+        if replacedRoot {
+            do {
+                try FileManager.default.removeItem(at: fixture.directory)
+                try FileManager.default.moveItem(
+                    at: fixtureParent.appendingPathComponent(displacedName),
+                    to: fixture.directory
+                )
+            } catch {
+                Issue.record("Repository-root fixture restoration failed: \(error)")
+            }
+        }
+    }
+
     private func expectSuccessfulRemoval(of fixture: TemporaryProfile) {
         do {
             try fixture.remove()

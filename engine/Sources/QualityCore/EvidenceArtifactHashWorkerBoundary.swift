@@ -94,7 +94,12 @@ package enum EvidenceArtifactHashWorkerBoundary {
 
         if terminationStatus == 1,
            response.artifacts == nil,
-           let errorCode = response.errorCode {
+           let errorCode = response.errorCode,
+           isExpectedWorkerFailure(
+               errorCode,
+               path: response.errorPath,
+               expectedPaths: expectedPaths
+           ) {
             throw EvidenceArtifactHashingError(
                 code: errorCode,
                 path: response.errorPath
@@ -110,6 +115,30 @@ package enum EvidenceArtifactHashWorkerBoundary {
             throw EvidenceArtifactHashingError(code: .workerFailure)
         }
         return artifacts
+    }
+
+    private static func isExpectedWorkerFailure(
+        _ code: EvidenceArtifactHashingError.Code,
+        path: String?,
+        expectedPaths: [String]
+    ) -> Bool {
+        switch code {
+        case .repositoryRootUnavailable:
+            return path == nil
+        case .artifactChangedDuringRead:
+            return path == nil || (path.map(expectedPaths.contains) ?? false)
+        case .artifactUnavailable,
+             .artifactNotRegularFile,
+             .artifactTooLarge,
+             .artifactReadFailure:
+            return path.map(expectedPaths.contains) ?? false
+        case .tooManyArtifacts,
+             .duplicatePath,
+             .invalidPath,
+             .deadlineExceeded,
+             .workerFailure:
+            return false
+        }
     }
 
     private static func isLowercaseSHA256(_ value: String) -> Bool {

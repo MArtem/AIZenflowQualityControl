@@ -62,7 +62,7 @@ package enum EvidenceArtifactHasher {
         }
         defer { Darwin.close(rootDescriptor) }
 
-        return try sortedPaths.map { path, components in
+        let artifacts = try sortedPaths.map { path, components in
             let artifact = try openArtifact(
                 components: components,
                 path: path,
@@ -92,6 +92,11 @@ package enum EvidenceArtifactHasher {
                 sha256: hash.digest
             )
         }
+        try validateCurrentRepositoryRoot(
+            at: repositoryRoot,
+            rootDescriptor: rootDescriptor
+        )
+        return artifacts
     }
 
     package static func validate(
@@ -265,9 +270,34 @@ package enum EvidenceArtifactHasher {
         }
     }
 
+    private static func validateCurrentRepositoryRoot(
+        at repositoryRoot: URL,
+        rootDescriptor: Int32
+    ) throws {
+        let currentRootDescriptor = Darwin.open(
+            repositoryRoot.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard currentRootDescriptor >= 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead)
+        }
+        defer { Darwin.close(currentRootDescriptor) }
+
+        var openedRootStatus = stat()
+        var currentRootStatus = stat()
+        guard fstat(rootDescriptor, &openedRootStatus) == 0,
+              fstat(currentRootDescriptor, &currentRootStatus) == 0,
+              sameIdentity(openedRootStatus, currentRootStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead)
+        }
+    }
+
+    private static func sameIdentity(_ lhs: stat, _ rhs: stat) -> Bool {
+        lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino
+    }
+
     private static func sameIdentityAndContents(_ lhs: stat, _ rhs: stat) -> Bool {
-        lhs.st_dev == rhs.st_dev
-            && lhs.st_ino == rhs.st_ino
+        sameIdentity(lhs, rhs)
             && lhs.st_size == rhs.st_size
             && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
             && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
