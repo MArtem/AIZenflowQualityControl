@@ -45,7 +45,9 @@ struct EvidenceArtifactHasherTests {
             "../outside",
             "reports/../outside",
             "reports//file",
-            "./file"
+            "./file",
+            "~report",
+            "~/report"
         ]
     )
     func rejectsUnsafePath(_ path: String) throws {
@@ -145,6 +147,64 @@ struct EvidenceArtifactHasherTests {
                 relativePaths: ["oversized.bin"],
                 repositoryRoot: fixture.directory
             )
+        }
+    }
+
+    @Test("Opened parent directories retain close-on-exec")
+    func parentDirectoryIsCloseOnExec() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("report".utf8), at: "reports/output.json")
+
+        _ = try EvidenceArtifactHasher.hash(
+            relativePaths: ["reports/output.json"],
+            repositoryRoot: fixture.directory
+        ) { _, parentDescriptor in
+            let flags = Darwin.fcntl(parentDescriptor, F_GETFD)
+            try #require(flags >= 0)
+            #expect(flags & FD_CLOEXEC == FD_CLOEXEC)
+        }
+    }
+
+    @Test("Atomic replacement during hashing fails closed")
+    func rejectsAtomicReplacement() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer { expectSuccessfulRemoval(of: fixture) }
+        try fixture.write(Data("old".utf8), at: "reports/output.json")
+
+        expectError(.artifactChangedDuringRead) {
+            try EvidenceArtifactHasher.hash(
+                relativePaths: ["reports/output.json"],
+                repositoryRoot: fixture.directory
+            ) { _, parentDescriptor in
+                let replacementDescriptor = Darwin.openat(
+                    parentDescriptor,
+                    "replacement.json",
+                    O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
+                    S_IRUSR | S_IWUSR
+                )
+                try #require(replacementDescriptor >= 0)
+                defer { Darwin.close(replacementDescriptor) }
+                let replacementBytes = Array("new".utf8)
+                let writtenByteCount = replacementBytes.withUnsafeBytes { bytes in
+                    Darwin.write(replacementDescriptor, bytes.baseAddress, bytes.count)
+                }
+                try #require(
+                    writtenByteCount == replacementBytes.count
+                )
+                try #require(
+                    "replacement.json".withCString { replacementName in
+                        "output.json".withCString { outputName in
+                            renameat(
+                                parentDescriptor,
+                                replacementName,
+                                parentDescriptor,
+                                outputName
+                            )
+                        }
+                    } == 0
+                )
+            }
         }
     }
 

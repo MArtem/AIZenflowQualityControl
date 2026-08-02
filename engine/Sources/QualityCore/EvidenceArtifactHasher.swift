@@ -32,6 +32,18 @@ public enum EvidenceArtifactHasher {
         relativePaths: [String],
         repositoryRoot: URL
     ) throws -> [EvidenceArtifact] {
+        try hash(
+            relativePaths: relativePaths,
+            repositoryRoot: repositoryRoot,
+            beforeFinalPathValidation: nil
+        )
+    }
+
+    static func hash(
+        relativePaths: [String],
+        repositoryRoot: URL,
+        beforeFinalPathValidation: ((String, Int32) throws -> Void)?
+    ) throws -> [EvidenceArtifact] {
         guard relativePaths.count <= maximumArtifactCount else {
             throw EvidenceArtifactHashingError(code: .tooManyArtifacts)
         }
@@ -63,16 +75,27 @@ public enum EvidenceArtifactHasher {
         defer { Darwin.close(rootDescriptor) }
 
         return try sortedPaths.map { path, components in
-            let descriptor = try openArtifact(
+            let artifact = try openArtifact(
                 components: components,
                 path: path,
                 rootDescriptor: rootDescriptor
             )
-            defer { Darwin.close(descriptor) }
+            defer {
+                Darwin.close(artifact.descriptor)
+                Darwin.close(artifact.parentDescriptor)
+            }
+
+            let hash = try sha256(descriptor: artifact.descriptor, path: path)
+            try beforeFinalPathValidation?(path, artifact.parentDescriptor)
+            try validateCurrentEntry(
+                artifact,
+                hashedStatus: hash.status,
+                path: path
+            )
 
             return EvidenceArtifact(
                 path: path,
-                sha256: try sha256(descriptor: descriptor, path: path)
+                sha256: hash.digest
             )
         }
     }
@@ -80,6 +103,7 @@ public enum EvidenceArtifactHasher {
     private static func validatedComponents(for path: String) -> [String]? {
         guard !path.isEmpty,
               !path.hasPrefix("/"),
+              !path.hasPrefix("~"),
               !path.contains("\0") else {
             return nil
         }
@@ -96,16 +120,15 @@ public enum EvidenceArtifactHasher {
         components: [String],
         path: String,
         rootDescriptor: Int32
-    ) throws -> Int32 {
+    ) throws -> OpenArtifact {
         guard let leafName = components.last else {
             throw EvidenceArtifactHashingError(code: .invalidPath, path: path)
         }
 
-        var parentDescriptor = Darwin.dup(rootDescriptor)
+        var parentDescriptor = Darwin.fcntl(rootDescriptor, F_DUPFD_CLOEXEC, 0)
         guard parentDescriptor >= 0 else {
             throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
         }
-        defer { Darwin.close(parentDescriptor) }
 
         for component in components.dropLast() {
             let childDescriptor = component.withCString {
@@ -116,6 +139,7 @@ public enum EvidenceArtifactHasher {
                 )
             }
             guard childDescriptor >= 0 else {
+                Darwin.close(parentDescriptor)
                 throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
             }
             Darwin.close(parentDescriptor)
@@ -130,12 +154,17 @@ public enum EvidenceArtifactHasher {
             )
         }
         guard descriptor >= 0 else {
+            Darwin.close(parentDescriptor)
             throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
         }
-        return descriptor
+        return OpenArtifact(
+            descriptor: descriptor,
+            parentDescriptor: parentDescriptor,
+            leafName: leafName
+        )
     }
 
-    private static func sha256(descriptor: Int32, path: String) throws -> String {
+    private static func sha256(descriptor: Int32, path: String) throws -> ArtifactHash {
         var initialStatus = stat()
         guard fstat(descriptor, &initialStatus) == 0 else {
             throw EvidenceArtifactHashingError(code: .artifactReadFailure, path: path)
@@ -182,7 +211,33 @@ public enum EvidenceArtifactHasher {
             throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
         }
 
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return ArtifactHash(
+            digest: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
+            status: finalStatus
+        )
+    }
+
+    private static func validateCurrentEntry(
+        _ artifact: OpenArtifact,
+        hashedStatus: stat,
+        path: String
+    ) throws {
+        var descriptorStatus = stat()
+        var entryStatus = stat()
+        let entryStatusResult = artifact.leafName.withCString {
+            Darwin.fstatat(
+                artifact.parentDescriptor,
+                $0,
+                &entryStatus,
+                AT_SYMLINK_NOFOLLOW
+            )
+        }
+        guard fstat(artifact.descriptor, &descriptorStatus) == 0,
+              entryStatusResult == 0,
+              sameIdentityAndContents(hashedStatus, descriptorStatus),
+              sameIdentityAndContents(hashedStatus, entryStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
     }
 
     private static func sameIdentityAndContents(_ lhs: stat, _ rhs: stat) -> Bool {
@@ -193,5 +248,16 @@ public enum EvidenceArtifactHasher {
             && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
             && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
             && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+    }
+
+    private struct OpenArtifact {
+        let descriptor: Int32
+        let parentDescriptor: Int32
+        let leafName: String
+    }
+
+    private struct ArtifactHash {
+        let digest: String
+        let status: stat
     }
 }
