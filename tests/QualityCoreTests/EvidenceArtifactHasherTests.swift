@@ -19,6 +19,24 @@ struct EvidenceArtifactHasherTests {
         }
         #expect(EvidenceArtifactHasher.isReadOnlyFileSystem(flags: UInt32(MNT_RDONLY)))
         #expect(!EvidenceArtifactHasher.isReadOnlyFileSystem(flags: 0))
+        #expect(
+            EvidenceArtifactHasher.isApprovedSnapshotFileSystem(
+                flags: UInt32(MNT_RDONLY),
+                matchesRootFileSystem: true
+            )
+        )
+        #expect(
+            !EvidenceArtifactHasher.isApprovedSnapshotFileSystem(
+                flags: UInt32(MNT_RDONLY),
+                matchesRootFileSystem: false
+            )
+        )
+        #expect(
+            !EvidenceArtifactHasher.isApprovedSnapshotFileSystem(
+                flags: 0,
+                matchesRootFileSystem: true
+            )
+        )
     }
 
     @Test("An empty artifact set needs no filesystem access")

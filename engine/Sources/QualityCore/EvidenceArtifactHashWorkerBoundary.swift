@@ -29,6 +29,8 @@ package struct EvidenceArtifactHashWorkerResponse: Codable, Sendable {
 package enum EvidenceArtifactHashWorkerBoundary {
     package static let hardTimeoutSeconds = 30.0
     package static let maximumOutputBytes = 512 * 1_024
+    // Half of macOS ARG_MAX leaves deterministic headroom for Process/exec bookkeeping.
+    package static let maximumExecPayloadBytes = 128 * 1_024
     package static let workerEnvironmentKey =
         "AIZENFLOW_QUALITY_INTERNAL_ARTIFACT_HASH_WORKER"
 
@@ -51,14 +53,22 @@ package enum EvidenceArtifactHashWorkerBoundary {
             return []
         }
 
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = [
+        let arguments = [
             "__artifact-hash-worker",
             "--snapshot-root", snapshotRoot.path
         ] + expectedPaths.flatMap { ["--artifact", $0] }
-        var environment = ProcessInfo.processInfo.environment
-        environment[workerEnvironmentKey] = "1"
+        let environment = [workerEnvironmentKey: "1"]
+        guard execPayloadByteCount(
+            executablePath: executableURL.path,
+            arguments: arguments,
+            environment: environment
+        ) <= maximumExecPayloadBytes else {
+            throw EvidenceArtifactHashingError(code: .workerRequestTooLarge)
+        }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
         process.environment = environment
 
         let result: BoundedProcessResult
@@ -137,9 +147,25 @@ package enum EvidenceArtifactHashWorkerBoundary {
              .duplicatePath,
              .invalidPath,
              .deadlineExceeded,
+             .workerRequestTooLarge,
              .workerFailure:
             return false
         }
+    }
+
+    static func execPayloadByteCount(
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String]
+    ) -> Int {
+        let argumentStrings = [executablePath] + arguments
+        let environmentStrings = environment.map { "\($0.key)=\($0.value)" }
+        let stringBytes = (argumentStrings + environmentStrings).reduce(0) {
+            $0 + $1.utf8.count + 1
+        }
+        let pointerCount = argumentStrings.count + environmentStrings.count + 2
+        return stringBytes
+            + pointerCount * MemoryLayout<UnsafePointer<CChar>?>.stride
     }
 
     private static func isLowercaseSHA256(_ value: String) -> Bool {

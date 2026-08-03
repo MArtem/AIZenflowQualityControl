@@ -29,6 +29,22 @@ struct EvidenceArtifactHashWorkerBoundaryTests {
         }
     }
 
+    @Test("Oversized worker arguments fail before process launch")
+    func oversizedWorkerArgumentsFailBeforeLaunch() {
+        let prefix = String(repeating: "😀", count: 1_022)
+        let paths = (0..<EvidenceArtifactHasher.maximumArtifactCount).map {
+            prefix + String(format: "%02d", $0)
+        }
+
+        expectError(.workerRequestTooLarge) {
+            try EvidenceArtifactHashWorkerBoundary.hash(
+                relativePaths: paths,
+                snapshotRoot: URL(fileURLWithPath: "/snapshot"),
+                executableURL: URL(fileURLWithPath: "/worker")
+            )
+        }
+    }
+
     @Test("A hard worker timeout fails closed")
     func timeoutFailsClosed() {
         expectError(.deadlineExceeded) {
