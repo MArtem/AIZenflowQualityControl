@@ -21,9 +21,12 @@ identity, changed permissions, missing/extra commands or gates, forged artifact 
 SHA, invalid authorization, or a false claimed verdict.
 
 The repository still contains no automatic push/PR workflow, hook, application profile, or
-application integration. Stage 9A does not add an evidence CLI command, cryptographic attestation,
-artifact hashing, or workflow evidence producer; those execution-boundary integrations remain
-separate work and no current diagnostic is promoted to authoritative release proof.
+application integration. Stage 9A includes bounded artifact-hashing primitives behind an internal
+worker boundary, but production artifact evidence remains blocked until a dedicated OS-backed
+immutable-snapshot provider exists; a read-only mount flag alone is not sufficient proof. The
+engine does not create or mount privileged snapshots, and does not add an evidence CLI command,
+cryptographic attestation, or workflow evidence producer; those execution-boundary integrations
+remain separate work and no current diagnostic is promoted to authoritative release proof.
 The public `quality static` command now isolates the cooperative scanner in a child process, applies
 a 245-second local hard ceiling, dynamically shortens it to preserve the five-minute workflow job
 budget, terminates the worker when its authenticated parent exits, bounds captured JSON to 8 MiB,

@@ -1,0 +1,428 @@
+import CryptoKit
+import Darwin
+import Foundation
+
+public struct EvidenceArtifactHashingError: Error, Equatable, Sendable {
+    public enum Code: String, Codable, Sendable {
+        case tooManyArtifacts = "TOO_MANY_ARTIFACTS"
+        case duplicatePath = "DUPLICATE_PATH"
+        case invalidPath = "INVALID_PATH"
+        case repositoryRootUnavailable = "REPOSITORY_ROOT_UNAVAILABLE"
+        case repositorySnapshotRequired = "REPOSITORY_SNAPSHOT_REQUIRED"
+        case artifactUnavailable = "ARTIFACT_UNAVAILABLE"
+        case artifactNotRegularFile = "ARTIFACT_NOT_REGULAR_FILE"
+        case artifactTooLarge = "ARTIFACT_TOO_LARGE"
+        case artifactReadFailure = "ARTIFACT_READ_FAILURE"
+        case artifactChangedDuringRead = "ARTIFACT_CHANGED_DURING_READ"
+        case deadlineExceeded = "DEADLINE_EXCEEDED"
+        case workerRequestTooLarge = "WORKER_REQUEST_TOO_LARGE"
+        case workerFailure = "WORKER_FAILURE"
+    }
+
+    public let code: Code
+    public let path: String?
+
+    public init(code: Code, path: String? = nil) {
+        self.code = code
+        self.path = path
+    }
+}
+
+package enum EvidenceArtifactHasher {
+    package static let maximumArtifactCount = 64
+    package static let maximumArtifactBytes = 64 * 1_024 * 1_024
+
+    package static func hashSnapshotInWorker(
+        relativePaths: [String],
+        repositoryRoot: URL
+    ) throws -> [EvidenceArtifact] {
+        guard isLocalFileURL(repositoryRoot) else {
+            throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
+        }
+        // MNT_RDONLY describes only this mount view. It cannot prove that a remote server or
+        // another mount cannot alter the backing data, so it is insufficient for one-pass
+        // production evidence. An OS-backed immutable-snapshot provider must establish that
+        // boundary before this entry point can hash artifacts.
+        throw EvidenceArtifactHashingError(code: .repositorySnapshotRequired)
+    }
+
+    static func hashInWorker(
+        relativePaths: [String],
+        repositoryRoot: URL
+    ) throws -> [EvidenceArtifact] {
+        try hashUnverifiedInWorker(
+            relativePaths: relativePaths,
+            repositoryRoot: repositoryRoot,
+            beforeStabilityRehash: nil,
+            beforeFinalPathValidation: nil
+        )
+    }
+
+    static func hashInWorker(
+        relativePaths: [String],
+        repositoryRoot: URL,
+        beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
+    ) throws -> [EvidenceArtifact] {
+        try hashUnverifiedInWorker(
+            relativePaths: relativePaths,
+            repositoryRoot: repositoryRoot,
+            beforeStabilityRehash: nil,
+            beforeFinalPathValidation: beforeFinalPathValidation
+        )
+    }
+
+    static func hashInWorker(
+        relativePaths: [String],
+        repositoryRoot: URL,
+        beforeStabilityRehash: ((String, Int32) throws -> Void)?,
+        beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
+    ) throws -> [EvidenceArtifact] {
+        try hashUnverifiedInWorker(
+            relativePaths: relativePaths,
+            repositoryRoot: repositoryRoot,
+            beforeStabilityRehash: beforeStabilityRehash,
+            beforeFinalPathValidation: beforeFinalPathValidation
+        )
+    }
+
+    private static func hashUnverifiedInWorker(
+        relativePaths: [String],
+        repositoryRoot: URL,
+        beforeStabilityRehash: ((String, Int32) throws -> Void)?,
+        beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
+    ) throws -> [EvidenceArtifact] {
+        let validatedPaths = try validate(relativePaths: relativePaths)
+        let sortedPaths = validatedPaths.sorted { $0.0 < $1.0 }
+
+        guard !sortedPaths.isEmpty else {
+            return []
+        }
+
+        let rootDescriptor = Darwin.open(
+            repositoryRoot.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard rootDescriptor >= 0 else {
+            throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
+        }
+        defer { Darwin.close(rootDescriptor) }
+
+        let hashedArtifacts = try sortedPaths.map { path, components in
+            let artifact = try openArtifact(
+                components: components,
+                path: path,
+                rootDescriptor: rootDescriptor
+            )
+            defer {
+                Darwin.close(artifact.descriptor)
+                Darwin.close(artifact.parentDescriptor)
+            }
+
+            let hash = try stableSHA256(
+                descriptor: artifact.descriptor,
+                path: path
+            ) {
+                try beforeStabilityRehash?(path, artifact.descriptor)
+            }
+            try beforeFinalPathValidation?(
+                path,
+                rootDescriptor,
+                artifact.parentDescriptor
+            )
+            try validateCurrentEntry(
+                artifact,
+                components: components,
+                hashedStatus: hash.status,
+                path: path,
+                rootDescriptor: rootDescriptor
+            )
+
+            return HashedArtifact(
+                artifact: EvidenceArtifact(
+                    path: path,
+                    sha256: hash.digest
+                ),
+                components: components,
+                status: hash.status
+            )
+        }
+        for artifact in hashedArtifacts {
+            try validateCurrentPath(
+                components: artifact.components,
+                hashedStatus: artifact.status,
+                path: artifact.artifact.path,
+                rootDescriptor: rootDescriptor
+            )
+        }
+        try validateCurrentRepositoryRoot(
+            at: repositoryRoot,
+            rootDescriptor: rootDescriptor
+        )
+        return hashedArtifacts.map(\.artifact)
+    }
+
+    package static func validate(
+        relativePaths: [String]
+    ) throws -> [(String, [String])] {
+        guard relativePaths.count <= maximumArtifactCount else {
+            throw EvidenceArtifactHashingError(code: .tooManyArtifacts)
+        }
+        let validatedPaths = try relativePaths.map { path -> (String, [String]) in
+            guard EvidenceVerifier.isBoundedNonEmptyString(path),
+                  let components = validatedComponents(for: path) else {
+                throw EvidenceArtifactHashingError(code: .invalidPath, path: path)
+            }
+            return (path, components)
+        }
+        guard Set(validatedPaths.map(\.0)).count == validatedPaths.count else {
+            throw EvidenceArtifactHashingError(code: .duplicatePath)
+        }
+        return validatedPaths
+    }
+
+    package static func isLocalFileURL(_ url: URL) -> Bool {
+        guard url.isFileURL else {
+            return false
+        }
+        guard let host = url.host else {
+            return true
+        }
+        return host.isEmpty || host == "localhost"
+    }
+
+    private static func validatedComponents(for path: String) -> [String]? {
+        guard !path.isEmpty,
+              !path.hasPrefix("/"),
+              !path.hasPrefix("~"),
+              !path.contains("\0") else {
+            return nil
+        }
+
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            return nil
+        }
+        return components.map(String.init)
+    }
+
+    private static func openArtifact(
+        components: [String],
+        path: String,
+        rootDescriptor: Int32
+    ) throws -> OpenArtifact {
+        guard let leafName = components.last else {
+            throw EvidenceArtifactHashingError(code: .invalidPath, path: path)
+        }
+
+        var parentDescriptor = Darwin.fcntl(rootDescriptor, F_DUPFD_CLOEXEC, 0)
+        guard parentDescriptor >= 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
+        }
+
+        for component in components.dropLast() {
+            let childDescriptor = component.withCString {
+                Darwin.openat(
+                    parentDescriptor,
+                    $0,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                )
+            }
+            guard childDescriptor >= 0 else {
+                Darwin.close(parentDescriptor)
+                throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
+            }
+            Darwin.close(parentDescriptor)
+            parentDescriptor = childDescriptor
+        }
+
+        let descriptor = leafName.withCString {
+            Darwin.openat(
+                parentDescriptor,
+                $0,
+                O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
+        guard descriptor >= 0 else {
+            Darwin.close(parentDescriptor)
+            throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
+        }
+        return OpenArtifact(
+            descriptor: descriptor,
+            parentDescriptor: parentDescriptor,
+            leafName: leafName
+        )
+    }
+
+    private static func sha256(descriptor: Int32, path: String) throws -> ArtifactHash {
+        var initialStatus = stat()
+        guard fstat(descriptor, &initialStatus) == 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactReadFailure, path: path)
+        }
+        guard initialStatus.st_mode & S_IFMT == S_IFREG else {
+            throw EvidenceArtifactHashingError(code: .artifactNotRegularFile, path: path)
+        }
+        guard initialStatus.st_size >= 0,
+              initialStatus.st_size <= off_t(maximumArtifactBytes) else {
+            throw EvidenceArtifactHashingError(code: .artifactTooLarge, path: path)
+        }
+
+        var hasher = SHA256()
+        var bytesRead = 0
+        var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+
+        while true {
+            let readCount = buffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+            }
+            if readCount == 0 {
+                break
+            }
+            if readCount < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                throw EvidenceArtifactHashingError(code: .artifactReadFailure, path: path)
+            }
+
+            bytesRead += readCount
+            guard bytesRead <= maximumArtifactBytes else {
+                throw EvidenceArtifactHashingError(code: .artifactTooLarge, path: path)
+            }
+            hasher.update(data: buffer.prefix(readCount))
+        }
+
+        var finalStatus = stat()
+        guard fstat(descriptor, &finalStatus) == 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactReadFailure, path: path)
+        }
+        guard off_t(bytesRead) == initialStatus.st_size,
+              sameIdentityAndContents(initialStatus, finalStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+
+        return ArtifactHash(
+            digest: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
+            status: finalStatus
+        )
+    }
+
+    private static func stableSHA256(
+        descriptor: Int32,
+        path: String,
+        beforeSecondPass: () throws -> Void
+    ) throws -> ArtifactHash {
+        let firstHash = try sha256(descriptor: descriptor, path: path)
+        try beforeSecondPass()
+        guard lseek(descriptor, 0, SEEK_SET) == 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactReadFailure, path: path)
+        }
+        let secondHash = try sha256(descriptor: descriptor, path: path)
+        guard firstHash.digest == secondHash.digest,
+              sameIdentityAndContents(firstHash.status, secondHash.status) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+        return secondHash
+    }
+
+    private static func validateCurrentEntry(
+        _ artifact: OpenArtifact,
+        components: [String],
+        hashedStatus: stat,
+        path: String,
+        rootDescriptor: Int32
+    ) throws {
+        var descriptorStatus = stat()
+        guard fstat(artifact.descriptor, &descriptorStatus) == 0,
+              sameIdentityAndContents(hashedStatus, descriptorStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+
+        try validateCurrentPath(
+            components: components,
+            hashedStatus: hashedStatus,
+            path: path,
+            rootDescriptor: rootDescriptor
+        )
+    }
+
+    private static func validateCurrentPath(
+        components: [String],
+        hashedStatus: stat,
+        path: String,
+        rootDescriptor: Int32
+    ) throws {
+        let currentArtifact: OpenArtifact
+        do {
+            currentArtifact = try openArtifact(
+                components: components,
+                path: path,
+                rootDescriptor: rootDescriptor
+            )
+        } catch {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+        defer {
+            Darwin.close(currentArtifact.descriptor)
+            Darwin.close(currentArtifact.parentDescriptor)
+        }
+
+        var currentStatus = stat()
+        guard fstat(currentArtifact.descriptor, &currentStatus) == 0,
+              sameIdentityAndContents(hashedStatus, currentStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
+        }
+    }
+
+    private static func validateCurrentRepositoryRoot(
+        at repositoryRoot: URL,
+        rootDescriptor: Int32
+    ) throws {
+        let currentRootDescriptor = Darwin.open(
+            repositoryRoot.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard currentRootDescriptor >= 0 else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead)
+        }
+        defer { Darwin.close(currentRootDescriptor) }
+
+        var openedRootStatus = stat()
+        var currentRootStatus = stat()
+        guard fstat(rootDescriptor, &openedRootStatus) == 0,
+              fstat(currentRootDescriptor, &currentRootStatus) == 0,
+              sameIdentity(openedRootStatus, currentRootStatus) else {
+            throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead)
+        }
+    }
+
+    private static func sameIdentity(_ lhs: stat, _ rhs: stat) -> Bool {
+        lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino
+    }
+
+    private static func sameIdentityAndContents(_ lhs: stat, _ rhs: stat) -> Bool {
+        sameIdentity(lhs, rhs)
+            && lhs.st_size == rhs.st_size
+            && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+            && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+            && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+            && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+    }
+
+    private struct OpenArtifact {
+        let descriptor: Int32
+        let parentDescriptor: Int32
+        let leafName: String
+    }
+
+    private struct ArtifactHash {
+        let digest: String
+        let status: stat
+    }
+
+    private struct HashedArtifact {
+        let artifact: EvidenceArtifact
+        let components: [String]
+        let status: stat
+    }
+}
