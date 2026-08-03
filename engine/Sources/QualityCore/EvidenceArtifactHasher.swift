@@ -36,23 +36,23 @@ package enum EvidenceArtifactHasher {
         relativePaths: [String],
         repositoryRoot: URL
     ) throws -> [EvidenceArtifact] {
-        try hashInWorker(
-            relativePaths: relativePaths,
-            repositoryRoot: repositoryRoot,
-            requiresReadOnlySnapshot: true,
-            beforeStabilityRehash: nil,
-            beforeFinalPathValidation: nil
-        )
+        guard isLocalFileURL(repositoryRoot) else {
+            throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
+        }
+        // MNT_RDONLY describes only this mount view. It cannot prove that a remote server or
+        // another mount cannot alter the backing data, so it is insufficient for one-pass
+        // production evidence. An OS-backed immutable-snapshot provider must establish that
+        // boundary before this entry point can hash artifacts.
+        throw EvidenceArtifactHashingError(code: .repositorySnapshotRequired)
     }
 
     static func hashInWorker(
         relativePaths: [String],
         repositoryRoot: URL
     ) throws -> [EvidenceArtifact] {
-        try hashInWorker(
+        try hashUnverifiedInWorker(
             relativePaths: relativePaths,
             repositoryRoot: repositoryRoot,
-            requiresReadOnlySnapshot: false,
             beforeStabilityRehash: nil,
             beforeFinalPathValidation: nil
         )
@@ -63,10 +63,9 @@ package enum EvidenceArtifactHasher {
         repositoryRoot: URL,
         beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
     ) throws -> [EvidenceArtifact] {
-        try hashInWorker(
+        try hashUnverifiedInWorker(
             relativePaths: relativePaths,
             repositoryRoot: repositoryRoot,
-            requiresReadOnlySnapshot: false,
             beforeStabilityRehash: nil,
             beforeFinalPathValidation: beforeFinalPathValidation
         )
@@ -78,19 +77,17 @@ package enum EvidenceArtifactHasher {
         beforeStabilityRehash: ((String, Int32) throws -> Void)?,
         beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
     ) throws -> [EvidenceArtifact] {
-        try hashInWorker(
+        try hashUnverifiedInWorker(
             relativePaths: relativePaths,
             repositoryRoot: repositoryRoot,
-            requiresReadOnlySnapshot: false,
             beforeStabilityRehash: beforeStabilityRehash,
             beforeFinalPathValidation: beforeFinalPathValidation
         )
     }
 
-    private static func hashInWorker(
+    private static func hashUnverifiedInWorker(
         relativePaths: [String],
         repositoryRoot: URL,
-        requiresReadOnlySnapshot: Bool,
         beforeStabilityRehash: ((String, Int32) throws -> Void)?,
         beforeFinalPathValidation: ((String, Int32, Int32) throws -> Void)?
     ) throws -> [EvidenceArtifact] {
@@ -109,32 +106,23 @@ package enum EvidenceArtifactHasher {
             throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
         }
         defer { Darwin.close(rootDescriptor) }
-        let snapshotFileSystem = requiresReadOnlySnapshot
-            ? try validateReadOnlySnapshot(rootDescriptor: rootDescriptor)
-            : nil
 
         let hashedArtifacts = try sortedPaths.map { path, components in
             let artifact = try openArtifact(
                 components: components,
                 path: path,
-                rootDescriptor: rootDescriptor,
-                snapshotFileSystem: snapshotFileSystem
+                rootDescriptor: rootDescriptor
             )
             defer {
                 Darwin.close(artifact.descriptor)
                 Darwin.close(artifact.parentDescriptor)
             }
 
-            let hash: ArtifactHash
-            if requiresReadOnlySnapshot {
-                hash = try sha256(descriptor: artifact.descriptor, path: path)
-            } else {
-                hash = try stableSHA256(
-                    descriptor: artifact.descriptor,
-                    path: path
-                ) {
-                    try beforeStabilityRehash?(path, artifact.descriptor)
-                }
+            let hash = try stableSHA256(
+                descriptor: artifact.descriptor,
+                path: path
+            ) {
+                try beforeStabilityRehash?(path, artifact.descriptor)
             }
             try beforeFinalPathValidation?(
                 path,
@@ -146,8 +134,7 @@ package enum EvidenceArtifactHasher {
                 components: components,
                 hashedStatus: hash.status,
                 path: path,
-                rootDescriptor: rootDescriptor,
-                snapshotFileSystem: snapshotFileSystem
+                rootDescriptor: rootDescriptor
             )
 
             return HashedArtifact(
@@ -164,15 +151,9 @@ package enum EvidenceArtifactHasher {
                 components: artifact.components,
                 hashedStatus: artifact.status,
                 path: artifact.artifact.path,
-                rootDescriptor: rootDescriptor,
-                snapshotFileSystem: snapshotFileSystem
+                rootDescriptor: rootDescriptor
             )
         }
-        try validateSnapshotFileSystem(
-            descriptor: rootDescriptor,
-            expected: snapshotFileSystem,
-            path: nil
-        )
         try validateCurrentRepositoryRoot(
             at: repositoryRoot,
             rootDescriptor: rootDescriptor
@@ -199,28 +180,14 @@ package enum EvidenceArtifactHasher {
         return validatedPaths
     }
 
-    private static func validateReadOnlySnapshot(
-        rootDescriptor: Int32
-    ) throws -> SnapshotFileSystem {
-        var fileSystemStatus = statfs()
-        guard fstatfs(rootDescriptor, &fileSystemStatus) == 0 else {
-            throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
+    package static func isLocalFileURL(_ url: URL) -> Bool {
+        guard url.isFileURL else {
+            return false
         }
-        guard isReadOnlyFileSystem(flags: fileSystemStatus.f_flags) else {
-            throw EvidenceArtifactHashingError(code: .repositorySnapshotRequired)
+        guard let host = url.host else {
+            return true
         }
-        return SnapshotFileSystem(identifier: fileSystemStatus.f_fsid)
-    }
-
-    static func isReadOnlyFileSystem(flags: UInt32) -> Bool {
-        flags & UInt32(MNT_RDONLY) == UInt32(MNT_RDONLY)
-    }
-
-    static func isApprovedSnapshotFileSystem(
-        flags: UInt32,
-        matchesRootFileSystem: Bool
-    ) -> Bool {
-        matchesRootFileSystem && isReadOnlyFileSystem(flags: flags)
+        return host.isEmpty || host == "localhost"
     }
 
     private static func validatedComponents(for path: String) -> [String]? {
@@ -242,8 +209,7 @@ package enum EvidenceArtifactHasher {
     private static func openArtifact(
         components: [String],
         path: String,
-        rootDescriptor: Int32,
-        snapshotFileSystem: SnapshotFileSystem? = nil
+        rootDescriptor: Int32
     ) throws -> OpenArtifact {
         guard let leafName = components.last else {
             throw EvidenceArtifactHashingError(code: .invalidPath, path: path)
@@ -266,17 +232,6 @@ package enum EvidenceArtifactHasher {
                 Darwin.close(parentDescriptor)
                 throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
             }
-            do {
-                try validateSnapshotFileSystem(
-                    descriptor: childDescriptor,
-                    expected: snapshotFileSystem,
-                    path: path
-                )
-            } catch {
-                Darwin.close(childDescriptor)
-                Darwin.close(parentDescriptor)
-                throw error
-            }
             Darwin.close(parentDescriptor)
             parentDescriptor = childDescriptor
         }
@@ -292,56 +247,11 @@ package enum EvidenceArtifactHasher {
             Darwin.close(parentDescriptor)
             throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
         }
-        do {
-            try validateSnapshotFileSystem(
-                descriptor: descriptor,
-                expected: snapshotFileSystem,
-                path: path
-            )
-        } catch {
-            Darwin.close(descriptor)
-            Darwin.close(parentDescriptor)
-            throw error
-        }
         return OpenArtifact(
             descriptor: descriptor,
             parentDescriptor: parentDescriptor,
             leafName: leafName
         )
-    }
-
-    private static func validateSnapshotFileSystem(
-        descriptor: Int32,
-        expected: SnapshotFileSystem?,
-        path: String?
-    ) throws {
-        guard let expected else {
-            return
-        }
-        var fileSystemStatus = statfs()
-        guard fstatfs(descriptor, &fileSystemStatus) == 0 else {
-            if let path {
-                throw EvidenceArtifactHashingError(code: .artifactUnavailable, path: path)
-            }
-            throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
-        }
-        guard isApprovedSnapshotFileSystem(
-            flags: fileSystemStatus.f_flags,
-            matchesRootFileSystem: sameFileSystem(
-                fileSystemStatus.f_fsid,
-                expected.identifier
-            )
-        ) else {
-            throw EvidenceArtifactHashingError(code: .repositorySnapshotRequired)
-        }
-    }
-
-    private static func sameFileSystem(_ lhs: fsid_t, _ rhs: fsid_t) -> Bool {
-        withUnsafeBytes(of: lhs) { lhsBytes in
-            withUnsafeBytes(of: rhs) { rhsBytes in
-                lhsBytes.elementsEqual(rhsBytes)
-            }
-        }
     }
 
     private static func sha256(descriptor: Int32, path: String) throws -> ArtifactHash {
@@ -420,8 +330,7 @@ package enum EvidenceArtifactHasher {
         components: [String],
         hashedStatus: stat,
         path: String,
-        rootDescriptor: Int32,
-        snapshotFileSystem: SnapshotFileSystem?
+        rootDescriptor: Int32
     ) throws {
         var descriptorStatus = stat()
         guard fstat(artifact.descriptor, &descriptorStatus) == 0,
@@ -433,8 +342,7 @@ package enum EvidenceArtifactHasher {
             components: components,
             hashedStatus: hashedStatus,
             path: path,
-            rootDescriptor: rootDescriptor,
-            snapshotFileSystem: snapshotFileSystem
+            rootDescriptor: rootDescriptor
         )
     }
 
@@ -442,16 +350,14 @@ package enum EvidenceArtifactHasher {
         components: [String],
         hashedStatus: stat,
         path: String,
-        rootDescriptor: Int32,
-        snapshotFileSystem: SnapshotFileSystem? = nil
+        rootDescriptor: Int32
     ) throws {
         let currentArtifact: OpenArtifact
         do {
             currentArtifact = try openArtifact(
                 components: components,
                 path: path,
-                rootDescriptor: rootDescriptor,
-                snapshotFileSystem: snapshotFileSystem
+                rootDescriptor: rootDescriptor
             )
         } catch {
             throw EvidenceArtifactHashingError(code: .artifactChangedDuringRead, path: path)
@@ -512,10 +418,6 @@ package enum EvidenceArtifactHasher {
     private struct ArtifactHash {
         let digest: String
         let status: stat
-    }
-
-    private struct SnapshotFileSystem {
-        let identifier: fsid_t
     }
 
     private struct HashedArtifact {

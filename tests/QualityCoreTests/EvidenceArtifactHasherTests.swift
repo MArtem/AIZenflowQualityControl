@@ -5,8 +5,8 @@ import Testing
 
 @Suite("Evidence artifact hashing")
 struct EvidenceArtifactHasherTests {
-    @Test("Production hashing requires a read-only filesystem snapshot")
-    func requiresReadOnlySnapshot() throws {
+    @Test("Production hashing remains blocked without an OS-backed immutable snapshot provider")
+    func requiresVerifiedImmutableSnapshot() throws {
         let fixture = try TemporaryProfile(data: Data("{}".utf8))
         defer { expectSuccessfulRemoval(of: fixture) }
         try fixture.write(Data("report".utf8), at: "report.json")
@@ -17,26 +17,12 @@ struct EvidenceArtifactHasherTests {
                 repositoryRoot: fixture.directory
             )
         }
-        #expect(EvidenceArtifactHasher.isReadOnlyFileSystem(flags: UInt32(MNT_RDONLY)))
-        #expect(!EvidenceArtifactHasher.isReadOnlyFileSystem(flags: 0))
-        #expect(
-            EvidenceArtifactHasher.isApprovedSnapshotFileSystem(
-                flags: UInt32(MNT_RDONLY),
-                matchesRootFileSystem: true
+        expectError(.repositoryRootUnavailable) {
+            try EvidenceArtifactHasher.hashSnapshotInWorker(
+                relativePaths: ["report.json"],
+                repositoryRoot: try #require(URL(string: "https://example.test/snapshot"))
             )
-        )
-        #expect(
-            !EvidenceArtifactHasher.isApprovedSnapshotFileSystem(
-                flags: UInt32(MNT_RDONLY),
-                matchesRootFileSystem: false
-            )
-        )
-        #expect(
-            !EvidenceArtifactHasher.isApprovedSnapshotFileSystem(
-                flags: 0,
-                matchesRootFileSystem: true
-            )
-        )
+        }
     }
 
     @Test("An empty artifact set needs no filesystem access")

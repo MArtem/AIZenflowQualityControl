@@ -45,6 +45,9 @@ package enum EvidenceArtifactHashWorkerBoundary {
               timeoutSeconds <= hardTimeoutSeconds else {
             throw EvidenceArtifactHashingError(code: .workerFailure)
         }
+        guard EvidenceArtifactHasher.isLocalFileURL(snapshotRoot) else {
+            throw EvidenceArtifactHashingError(code: .repositoryRootUnavailable)
+        }
         let validatedPaths = try EvidenceArtifactHasher.validate(
             relativePaths: relativePaths
         )

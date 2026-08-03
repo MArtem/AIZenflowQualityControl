@@ -29,6 +29,19 @@ struct EvidenceArtifactHashWorkerBoundaryTests {
         }
     }
 
+    @Test("A non-local snapshot URL fails before worker launch")
+    func rejectsNonLocalSnapshotURL() throws {
+        let snapshotURL = try #require(URL(string: "https://example.test/snapshot"))
+
+        expectError(.repositoryRootUnavailable) {
+            try EvidenceArtifactHashWorkerBoundary.hash(
+                relativePaths: ["report.json"],
+                snapshotRoot: snapshotURL,
+                executableURL: URL(fileURLWithPath: "/missing-worker")
+            )
+        }
+    }
+
     @Test("Oversized worker arguments fail before process launch")
     func oversizedWorkerArgumentsFailBeforeLaunch() {
         let prefix = String(repeating: "😀", count: 1_022)
