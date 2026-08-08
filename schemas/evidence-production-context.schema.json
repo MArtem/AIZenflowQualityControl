@@ -9,15 +9,9 @@
     "sourceRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
     "engineVersion": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
     "engineRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
-    "toolchain": { "$ref": "quality-evidence.schema.json#/$defs/toolchain" },
+    "toolchain": { "$ref": "quality-evidence.schema.json#/properties/toolchain" },
     "commands": { "$ref": "quality-evidence.schema.json#/properties/commands" },
     "gates": { "$ref": "quality-evidence.schema.json#/properties/gates" },
-    "userAuthorizedActions": {
-      "type": "array",
-      "maxItems": 7,
-      "uniqueItems": true,
-      "items": { "$ref": "quality-evidence.schema.json#/$defs/permissionAction" }
-    },
     "testCounts": { "$ref": "quality-evidence.schema.json#/properties/testCounts" },
     "testGateID": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
     "reviewRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
@@ -31,7 +25,6 @@
     "toolchain",
     "commands",
     "gates",
-    "userAuthorizedActions",
     "residualRisks"
   ]
 }

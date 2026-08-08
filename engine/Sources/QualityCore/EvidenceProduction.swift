@@ -63,7 +63,6 @@ public struct EvidenceProductionContext: Sendable {
     public let toolchain: EvidenceToolchain
     public let commands: [EvidenceCommand]
     public let gates: [EvidenceGate]
-    public let userAuthorizedActions: Set<PermissionAction>
     public let testCounts: EvidenceTestCounts?
     public let testGateID: String?
     public let reviewRevision: String?
@@ -77,7 +76,6 @@ public struct EvidenceProductionContext: Sendable {
         toolchain: EvidenceToolchain,
         commands: [EvidenceCommand],
         gates: [EvidenceGate],
-        userAuthorizedActions: Set<PermissionAction> = [],
         testCounts: EvidenceTestCounts? = nil,
         testGateID: String? = nil,
         reviewRevision: String? = nil,
@@ -90,7 +88,6 @@ public struct EvidenceProductionContext: Sendable {
         self.toolchain = toolchain
         self.commands = commands
         self.gates = gates
-        self.userAuthorizedActions = userAuthorizedActions
         self.testCounts = testCounts
         self.testGateID = testGateID
         self.reviewRevision = reviewRevision
@@ -121,13 +118,20 @@ public enum EvidenceProductionContextLoader {
 
 public enum EvidenceProductionError: Error, Equatable {
     case invalidContext([EvidenceVerificationIssue])
+    case invalidProfile([ValidationIssue])
 }
 
 public enum EvidenceProducer {
     public static func produce(
         context: EvidenceProductionContext,
-        profileSnapshot: ProfileSnapshot
+        profileSnapshot: ProfileSnapshot,
+        userAuthorizedActions: Set<PermissionAction> = []
     ) throws -> QualityEvidence {
+        let profileIssues = ProfileValidator.validate(profileSnapshot.profile)
+        guard profileIssues.isEmpty else {
+            throw EvidenceProductionError.invalidProfile(profileIssues)
+        }
+        try validateContextBounds(context)
         let evidence = QualityEvidence(
             sourceRepository: context.sourceRepository,
             sourceRevision: context.sourceRevision,
@@ -150,7 +154,11 @@ public enum EvidenceProducer {
         )
         let verification = EvidenceVerifier.verify(
             evidence,
-            expected: expectation(for: context, profileSnapshot: profileSnapshot)
+            expected: expectation(
+                for: context,
+                profileSnapshot: profileSnapshot,
+                userAuthorizedActions: userAuthorizedActions
+            )
         )
         guard verification.issues.isEmpty else {
             throw EvidenceProductionError.invalidContext(verification.issues)
@@ -158,9 +166,10 @@ public enum EvidenceProducer {
         return evidence
     }
 
-    public static func expectation(
+    static func expectation(
         for context: EvidenceProductionContext,
-        profileSnapshot: ProfileSnapshot
+        profileSnapshot: ProfileSnapshot,
+        userAuthorizedActions: Set<PermissionAction> = []
     ) -> EvidenceExpectation {
         var commandsByID: [String: EvidenceCommandExpectation] = [:]
         for command in context.commands where commandsByID[command.id] == nil {
@@ -190,13 +199,29 @@ public enum EvidenceProducer {
             permissions: profileSnapshot.profile.permissions,
             commandsByID: commandsByID,
             gatesByID: gatesByID,
-            userAuthorizedActions: context.userAuthorizedActions,
+            userAuthorizedActions: userAuthorizedActions,
             testCounts: context.testCounts,
             testGateID: context.testGateID,
             reviewRevision: context.reviewRevision,
             artifactSHA256ByPath: [:],
             residualRisks: Set(context.residualRisks)
         )
+    }
+
+    private static func validateContextBounds(
+        _ context: EvidenceProductionContext
+    ) throws {
+        let maximumItems = 64
+        guard context.commands.count <= maximumItems,
+              context.gates.count <= maximumItems,
+              context.residualRisks.count <= maximumItems else {
+            throw EvidenceProductionError.invalidContext([
+                EvidenceVerificationIssue(
+                    code: "QC.EVIDENCE.COLLECTION_LIMIT",
+                    message: "Evidence production context exceeds the collection limit."
+                )
+            ])
+        }
     }
 }
 
@@ -208,7 +233,6 @@ private struct EvidenceProductionDocument: Decodable {
     let toolchain: EvidenceToolchain
     let commands: [EvidenceCommand]
     let gates: [EvidenceGate]
-    let userAuthorizedActions: [PermissionAction]
     let testCounts: EvidenceTestCounts?
     let testGateID: String?
     let reviewRevision: String?
@@ -222,7 +246,6 @@ private struct EvidenceProductionDocument: Decodable {
         case toolchain
         case commands
         case gates
-        case userAuthorizedActions
         case testCounts
         case testGateID
         case reviewRevision
@@ -242,15 +265,6 @@ private struct EvidenceProductionDocument: Decodable {
         toolchain = try container.decode(EvidenceToolchain.self, forKey: .toolchain)
         commands = try container.decode([EvidenceCommand].self, forKey: .commands)
         gates = try container.decode([EvidenceGate].self, forKey: .gates)
-        userAuthorizedActions = try container.decode([PermissionAction].self, forKey: .userAuthorizedActions)
-        guard Set(userAuthorizedActions).count == userAuthorizedActions.count else {
-            throw DecodingError.dataCorrupted(
-                DecodingError.Context(
-                    codingPath: container.codingPath + [CodingKeys.userAuthorizedActions],
-                    debugDescription: "Evidence production context contains duplicate user-authorized actions."
-                )
-            )
-        }
         testCounts = try decodeOptionalProductionValue(
             EvidenceTestCounts.self,
             from: container,
@@ -274,7 +288,6 @@ private struct EvidenceProductionDocument: Decodable {
             toolchain: toolchain,
             commands: commands,
             gates: gates,
-            userAuthorizedActions: Set(userAuthorizedActions),
             testCounts: testCounts,
             testGateID: testGateID,
             reviewRevision: reviewRevision,

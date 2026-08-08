@@ -95,14 +95,50 @@ struct EvidenceProductionTests {
         }
     }
 
+    @Test("Trusted authorization is supplied outside the untrusted context")
+    func trustedAuthorizationCanProduceEvidence() throws {
+        let context = EvidenceProductionContext(
+            sourceRepository: "MArtem/example",
+            sourceRevision: sourceRevision,
+            engineVersion: "1.0.0",
+            engineRevision: engineRevision,
+            toolchain: toolchain,
+            commands: [
+                EvidenceCommand(
+                    id: "tests",
+                    commandSHA256: commandHash,
+                    exitCode: 0,
+                    actions: [.localTestExecution],
+                    authorization: .user
+                )
+            ],
+            gates: [
+                EvidenceGate(
+                    id: "QC.TESTS",
+                    status: .pass,
+                    message: "Tests passed.",
+                    commandID: "tests",
+                    actions: [.localTestExecution]
+                )
+            ]
+        )
+
+        let evidence = try EvidenceProducer.produce(
+            context: context,
+            profileSnapshot: profileSnapshot(),
+            userAuthorizedActions: [.localTestExecution]
+        )
+
+        #expect(evidence.claimedVerdict == .ready)
+    }
+
     @Test("Malformed, unknown, duplicate and null context JSON is rejected")
     func unsafeContextJSONIsRejected() {
         for document in [
             "{}",
             validContextJSON.replacingOccurrences(of: "\"residualRisks\":[]", with: "\"unknown\":true,\"residualRisks\":[]"),
             validContextJSON.replacingOccurrences(of: "\"sourceRepository\":\"MArtem/example\"", with: "\"sourceRepository\":\"MArtem/example\",\"sourceRepository\":\"forged\""),
-            validContextJSON.replacingOccurrences(of: "\"residualRisks\":[]", with: "\"residualRisks\":null"),
-            validContextJSON.replacingOccurrences(of: "\"userAuthorizedActions\":[]", with: "\"userAuthorizedActions\":[\"localTestExecution\",\"localTestExecution\"]")
+            validContextJSON.replacingOccurrences(of: "\"residualRisks\":[]", with: "\"residualRisks\":null")
         ] {
             #expect(throws: (any Error).self) {
                 try EvidenceProductionContextLoader.decode(Data(document.utf8))
@@ -155,6 +191,33 @@ struct EvidenceProductionTests {
         }
     }
 
+    @Test("Public context construction cannot bypass collection limits")
+    func oversizedPublicContextIsRejectedBeforeExpectationBuilding() {
+        let context = EvidenceProductionContext(
+            sourceRepository: "MArtem/example",
+            sourceRevision: sourceRevision,
+            engineVersion: "1.0.0",
+            engineRevision: engineRevision,
+            toolchain: toolchain,
+            commands: Array(repeating: EvidenceCommand(id: "static", commandSHA256: commandHash, exitCode: 0), count: 65),
+            gates: []
+        )
+
+        #expect(throws: EvidenceProductionError.self) {
+            try EvidenceProducer.produce(context: context, profileSnapshot: profileSnapshot())
+        }
+    }
+
+    @Test("Semantically invalid profiles cannot produce evidence")
+    func invalidProfileIsRejected() {
+        #expect(throws: EvidenceProductionError.self) {
+            try EvidenceProducer.produce(
+                context: validContext(),
+                profileSnapshot: profileSnapshot(root: ".", cache: ".quality-control-cache")
+            )
+        }
+    }
+
     private var toolchain: EvidenceToolchain {
         EvidenceToolchain(swiftVersion: "Swift 6", xcodeVersion: "Xcode 16")
     }
@@ -189,7 +252,10 @@ struct EvidenceProductionTests {
         )
     }
 
-    private func profileSnapshot() -> ProfileSnapshot {
+    private func profileSnapshot(
+        root: String = "/sandbox",
+        cache: String = "/sandbox/cache"
+    ) -> ProfileSnapshot {
         ProfileSnapshot(
             profile: ProjectProfile(
                 schemaVersion: 1,
@@ -206,7 +272,7 @@ struct EvidenceProductionTests {
                     simulatorOrDevice: .deny,
                     performanceOrInstruments: .deny
                 ),
-                sandbox: SandboxPaths(root: ".", cache: ".quality-control-cache")
+                sandbox: SandboxPaths(root: root, cache: cache)
             ),
             sha256: String(repeating: "d", count: 64)
         )
@@ -229,7 +295,7 @@ struct EvidenceProductionTests {
 
     private var validContextJSON: String {
         """
-        {"sourceRepository":"MArtem/example","sourceRevision":"\(sourceRevision)","engineVersion":"1.0.0","engineRevision":"\(engineRevision)","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[{"id":"static","commandSHA256":"\(commandHash)","exitCode":0,"actions":[],"authorization":"NOT_REQUIRED"}],"gates":[{"id":"QC.STATIC","status":"PASS","message":"Static analysis completed.","commandID":"static","actions":[]}],"userAuthorizedActions":[],"residualRisks":[]}
+        {"sourceRepository":"MArtem/example","sourceRevision":"\(sourceRevision)","engineVersion":"1.0.0","engineRevision":"\(engineRevision)","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[{"id":"static","commandSHA256":"\(commandHash)","exitCode":0,"actions":[],"authorization":"NOT_REQUIRED"}],"gates":[{"id":"QC.STATIC","status":"PASS","message":"Static analysis completed.","commandID":"static","actions":[]}],"residualRisks":[]}
         """
     }
 }
