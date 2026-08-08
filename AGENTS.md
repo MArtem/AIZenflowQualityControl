@@ -7,7 +7,7 @@ The reusable human policy is owned by `MArtem/AIZenflowDocumentation`, including
 `PRODUCTION_CODE_REVIEW_CHECKLIST.md`. This repository owns executable commands, schemas,
 policies, adapters, fixtures, bootstrap mechanisms, workflows, and machine evidence.
 
-## Mandatory Pre-Push Review Gate
+## Mandatory Exact-SHA Review Gate
 
 Start with a compact risk-based verification plan: changed surfaces, credible failure modes,
 exact checks, reusable current evidence, escalation triggers, and a bounded time/resource budget.
@@ -19,7 +19,7 @@ inputs, configuration, and toolchain are unchanged. Do not repeat a passing chec
 full scan, build, test suite, or exhaustive review without a new risk, changed evidence, unresolved
 ambiguity, or finding that justifies the added cost.
 
-Before committing or pushing any material change, review the complete proposed diff locally.
+Before committing, review the complete proposed diff locally.
 Type-checks, builds, tests, JSON/schema validation, workflow parsing, and `git diff --check` are
 supporting evidence; they do not replace semantic review.
 
@@ -36,6 +36,15 @@ reported explicitly before push, using the canonical checklist severity policy. 
 repeat the full-diff review from a clean perspective; do not limit the second pass to the
 previously reported lines. High-risk control-plane changes require an independent local reviewer
 when available and an exhaustive review recommendation for the final pushed SHA.
+
+After commit, capture the trusted base SHA and review the complete exact range through committed
+`HEAD`; confirm the worktree is clean and run the final relevant checks at that SHA. The receipt
+must record base, HEAD, range, contract rows, findings/disposition, command results, reused or
+omitted evidence, and residual risk. Re-review authority/provenance, schema/runtime versioning,
+aggregate encoded and decoded limits, public API bypasses, filesystem/symlink/TOCTOU boundaries,
+false success, and all producer/consumer call sites and claims. A new commit invalidates the
+receipt. Verify HEAD is unchanged before push and verify the remote branch resolves to the reviewed
+SHA after push. External review is an independent second barrier; it never replaces this gate.
 
 Test creation, test modification, test execution, runtime verification, GitHub checks, external
 review, commit, and push remain subject to the user's current explicit permissions. Missing or

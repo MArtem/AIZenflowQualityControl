@@ -1244,6 +1244,7 @@ struct EvidenceContractTests {
         testCounts: EvidenceTestCounts? = nil,
         reviewRevision: String? = nil,
         artifacts: [EvidenceArtifact]? = nil,
+        residualRisks: [String] = [],
         claimedVerdict: AdvisoryVerdict = .ready
     ) -> QualityEvidence {
         QualityEvidence(
@@ -1275,7 +1276,7 @@ struct EvidenceContractTests {
             artifacts: artifacts ?? [
                 EvidenceArtifact(path: "reports/static.json", sha256: artifactHash)
             ],
-            residualRisks: ["No Xcode build was run."],
+            residualRisks: residualRisks,
             claimedVerdict: claimedVerdict
         )
     }
@@ -1289,7 +1290,8 @@ struct EvidenceContractTests {
         userAuthorizedActions: Set<PermissionAction> = [],
         testCounts: EvidenceTestCounts? = nil,
         testGateID: String? = nil,
-        artifacts: [String: String]? = nil
+        artifacts: [String: String]? = nil,
+        residualRisks: Set<String> = []
     ) -> EvidenceExpectation {
         EvidenceExpectation(
             sourceRepository: "MArtem/AIZenflowQualityControl",
@@ -1319,7 +1321,7 @@ struct EvidenceContractTests {
             artifactSHA256ByPath: artifacts ?? [
                 "reports/static.json": artifactHash ?? self.artifactHash
             ],
-            residualRisks: ["No Xcode build was run."]
+            residualRisks: residualRisks
         )
     }
 }
