@@ -83,7 +83,21 @@ struct VerifierContractTests {
         #expect(report.status.rawValue == QualityStatus.pass.rawValue)
         #expect(report.checks.map(\.id) == ["QC.PROFILE.CONTRACT"])
     }
+
+    @Test("A structurally valid expectation document remains untrusted")
+    func expectationDocumentValidationDoesNotProduceEvidence() throws {
+        let fixture = try TemporaryProfile(data: Data(validExpectationJSON.utf8))
+        defer { try? fixture.remove() }
+
+        let report = QualityCommands.validateEvidenceExpectation(at: fixture.url)
+
+        #expect(report.status == .pass)
+        #expect(report.checks.map(\.id) == ["QC.EVIDENCE_EXPECTATION.STRUCTURE"])
+        #expect(report.checks[0].message.contains("remains untrusted"))
+    }
 }
+
+private let validExpectationJSON = #"{"schemaVersion":1,"sourceRepository":"MArtem/example","sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","engineVersion":"1.0.0","engineRevision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[],"gates":[],"residualRisks":[]}"#
 
 enum InvalidProfileInput: String, CaseIterable, Sendable {
     case malformed
