@@ -773,7 +773,10 @@ public enum EvidenceVerifier {
             &issues
         )
 
-        let derivedVerdict = aggregate(evidence.gates)
+        let derivedVerdict = derive(
+            gates: evidence.gates,
+            residualRisks: evidence.residualRisks
+        )
         require(
             evidence.claimedVerdict == derivedVerdict,
             "QC.EVIDENCE.CLAIMED_VERDICT_MISMATCH",
@@ -786,7 +789,10 @@ public enum EvidenceVerifier {
         return EvidenceVerification(verdict: derivedVerdict, issues: [])
     }
 
-    static func aggregate(_ gates: [EvidenceGate]) -> AdvisoryVerdict {
+    public static func derive(
+        gates: [EvidenceGate],
+        residualRisks: [String] = []
+    ) -> AdvisoryVerdict {
         guard !gates.isEmpty else {
             return .blocked
         }
@@ -799,10 +805,17 @@ public enum EvidenceVerifier {
         if gates.contains(where: { $0.status == .notRunByUserDecision }) {
             return .needsOwnerDecision
         }
+        if !residualRisks.isEmpty {
+            return .needsOwnerDecision
+        }
         if gates.contains(where: { $0.status == .pass }) {
             return .ready
         }
         return .blocked
+    }
+
+    static func aggregate(_ gates: [EvidenceGate]) -> AdvisoryVerdict {
+        derive(gates: gates)
     }
 
     private static func validateCommands(

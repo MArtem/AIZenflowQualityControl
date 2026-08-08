@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 
 public struct ValidationIssue: Codable, Equatable, Sendable {
@@ -241,10 +242,17 @@ private struct JSONDuplicateKeyParser {
 
 public enum ProfileLoader {
     public static func load(from url: URL) throws -> ProjectProfile {
+        try loadSnapshot(from: url).profile
+    }
+
+    public static func loadSnapshot(from url: URL) throws -> ProfileSnapshot {
         let data = try JSONDocumentConstraints.loadData(from: url)
         try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
         try validateClosedObjectProperties(in: data)
-        return try JSONDecoder().decode(ProjectProfile.self, from: data)
+        return ProfileSnapshot(
+            profile: try JSONDecoder().decode(ProjectProfile.self, from: data),
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        )
     }
 
     private static func validateClosedObjectProperties(in data: Data) throws {
@@ -296,6 +304,16 @@ public enum ProfileLoader {
         guard Set(object.keys).isSubset(of: allowed) else {
             throw UnknownProfilePropertyError()
         }
+    }
+}
+
+public struct ProfileSnapshot: Sendable {
+    public let profile: ProjectProfile
+    public let sha256: String
+
+    public init(profile: ProjectProfile, sha256: String) {
+        self.profile = profile
+        self.sha256 = sha256
     }
 }
 
