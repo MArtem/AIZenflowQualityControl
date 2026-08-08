@@ -54,10 +54,14 @@ struct EvidenceProductionTests {
     func profileSnapshotHashMatchesBytes() throws {
         let data = profileJSON().data(using: .utf8)!
         let expectedHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let url = try temporaryFile(data: data)
-        defer { try? FileManager.default.removeItem(at: url) }
+        let fixture = try TemporaryProfile(data: data)
+        defer {
+            #expect(throws: Never.self) {
+                try fixture.remove()
+            }
+        }
 
-        let snapshot = try ProfileLoader.loadSnapshot(from: url)
+        let snapshot = try ProfileLoader.loadSnapshot(from: fixture.url)
 
         #expect(snapshot.sha256 == expectedHash)
         #expect(snapshot.profile.schemaVersion == 1)
@@ -138,7 +142,8 @@ struct EvidenceProductionTests {
             "{}",
             validContextJSON.replacingOccurrences(of: "\"residualRisks\":[]", with: "\"unknown\":true,\"residualRisks\":[]"),
             validContextJSON.replacingOccurrences(of: "\"sourceRepository\":\"MArtem/example\"", with: "\"sourceRepository\":\"MArtem/example\",\"sourceRepository\":\"forged\""),
-            validContextJSON.replacingOccurrences(of: "\"residualRisks\":[]", with: "\"residualRisks\":null")
+            validContextJSON.replacingOccurrences(of: "\"residualRisks\":[]", with: "\"residualRisks\":null"),
+            validContextJSON.replacingOccurrences(of: "\"schemaVersion\":1", with: "\"schemaVersion\":2")
         ] {
             #expect(throws: (any Error).self) {
                 try EvidenceProductionContextLoader.decode(Data(document.utf8))
@@ -149,12 +154,11 @@ struct EvidenceProductionTests {
     @Test("Inconsistent test count context is rejected")
     func inconsistentTestCountsAreRejected() {
         let context = validContext(
-            testCounts: EvidenceTestCounts(total: 2, passed: 2, failed: 1, skipped: 0),
-            testGateID: "QC.STATIC"
+            testCounts: EvidenceTestCounts(total: 2, passed: 2, failed: 1, skipped: 0)
         )
 
         #expect(throws: EvidenceProductionError.self) {
-            try produce(context: context)
+            try produce(context: context, trustedTestGateID: "QC.STATIC")
         }
     }
 
@@ -246,8 +250,7 @@ struct EvidenceProductionTests {
     private func validContext(
         status: GateStatus = .pass,
         residualRisks: [String] = [],
-        testCounts: EvidenceTestCounts? = nil,
-        testGateID: String? = nil
+        testCounts: EvidenceTestCounts? = nil
     ) -> EvidenceProductionContext {
         EvidenceProductionContext(
             sourceRepository: "MArtem/example",
@@ -268,7 +271,6 @@ struct EvidenceProductionTests {
                 )
             ],
             testCounts: testCounts,
-            testGateID: testGateID,
             residualRisks: residualRisks
         )
     }
@@ -283,7 +285,8 @@ struct EvidenceProductionTests {
     private func produce(
         context: EvidenceProductionContext,
         profileSnapshot: ProfileSnapshot? = nil,
-        userAuthorizedActions: Set<PermissionAction> = []
+        userAuthorizedActions: Set<PermissionAction> = [],
+        trustedTestGateID: String? = nil
     ) throws -> QualityEvidence {
         let snapshot = profileSnapshot ?? self.profileSnapshot()
         return try EvidenceProducer.produce(
@@ -292,7 +295,8 @@ struct EvidenceProductionTests {
             expected: trustedExpectation(
                 for: context,
                 profileSnapshot: snapshot,
-                userAuthorizedActions: userAuthorizedActions
+                userAuthorizedActions: userAuthorizedActions,
+                testGateID: trustedTestGateID
             )
         )
     }
@@ -300,7 +304,8 @@ struct EvidenceProductionTests {
     private func trustedExpectation(
         for context: EvidenceProductionContext,
         profileSnapshot: ProfileSnapshot,
-        userAuthorizedActions: Set<PermissionAction> = []
+        userAuthorizedActions: Set<PermissionAction> = [],
+        testGateID: String? = nil
     ) -> EvidenceExpectation {
         let commands = Dictionary(
             uniqueKeysWithValues: context.commands.map {
@@ -334,20 +339,11 @@ struct EvidenceProductionTests {
             gatesByID: gates,
             userAuthorizedActions: userAuthorizedActions,
             testCounts: context.testCounts,
-            testGateID: context.testGateID,
+            testGateID: testGateID,
             reviewRevision: context.reviewRevision,
             artifactSHA256ByPath: [:],
             residualRisks: Set(context.residualRisks)
         )
-    }
-
-    private func temporaryFile(data: Data) throws -> URL {
-        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".quality-control-cache/test-fixtures", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(UUID().uuidString)
-        try data.write(to: url, options: .atomic)
-        return url
     }
 
     private func profileJSON(
@@ -361,7 +357,7 @@ struct EvidenceProductionTests {
 
     private var validContextJSON: String {
         """
-        {"sourceRepository":"MArtem/example","sourceRevision":"\(sourceRevision)","engineVersion":"1.0.0","engineRevision":"\(engineRevision)","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[{"id":"static","commandSHA256":"\(commandHash)","exitCode":0,"actions":[],"authorization":"NOT_REQUIRED"}],"gates":[{"id":"QC.STATIC","status":"PASS","message":"Static analysis completed.","commandID":"static","actions":[]}],"residualRisks":[]}
+        {"schemaVersion":1,"sourceRepository":"MArtem/example","sourceRevision":"\(sourceRevision)","engineVersion":"1.0.0","engineRevision":"\(engineRevision)","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[{"id":"static","commandSHA256":"\(commandHash)","exitCode":0,"actions":[],"authorization":"NOT_REQUIRED"}],"gates":[{"id":"QC.STATIC","status":"PASS","message":"Static analysis completed.","commandID":"static","actions":[]}],"residualRisks":[]}
         """
     }
 }

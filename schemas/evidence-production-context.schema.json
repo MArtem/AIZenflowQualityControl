@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "schemaVersion": { "const": 1 },
     "sourceRepository": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
     "sourceRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
     "engineVersion": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
@@ -13,11 +14,11 @@
     "commands": { "$ref": "quality-evidence.schema.json#/properties/commands" },
     "gates": { "$ref": "quality-evidence.schema.json#/properties/gates" },
     "testCounts": { "$ref": "quality-evidence.schema.json#/properties/testCounts" },
-    "testGateID": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
     "reviewRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
     "residualRisks": { "$ref": "quality-evidence.schema.json#/properties/residualRisks" }
   },
   "required": [
+    "schemaVersion",
     "sourceRepository",
     "sourceRevision",
     "engineVersion",

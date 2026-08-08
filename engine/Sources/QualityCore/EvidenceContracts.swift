@@ -789,7 +789,7 @@ public enum EvidenceVerifier {
         return EvidenceVerification(verdict: derivedVerdict, issues: [])
     }
 
-    public static func derive(
+    static func derive(
         gates: [EvidenceGate],
         residualRisks: [String] = []
     ) -> AdvisoryVerdict {

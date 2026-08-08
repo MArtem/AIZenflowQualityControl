@@ -56,6 +56,7 @@ private func decodeOptionalProductionValue<Value: Decodable, Key: CodingKey>(
 }
 
 public struct EvidenceProductionContext: Sendable {
+    public let schemaVersion: Int
     public let sourceRepository: String
     public let sourceRevision: String
     public let engineVersion: String
@@ -64,11 +65,11 @@ public struct EvidenceProductionContext: Sendable {
     public let commands: [EvidenceCommand]
     public let gates: [EvidenceGate]
     public let testCounts: EvidenceTestCounts?
-    public let testGateID: String?
     public let reviewRevision: String?
     public let residualRisks: [String]
 
     public init(
+        schemaVersion: Int = 1,
         sourceRepository: String,
         sourceRevision: String,
         engineVersion: String,
@@ -77,10 +78,10 @@ public struct EvidenceProductionContext: Sendable {
         commands: [EvidenceCommand],
         gates: [EvidenceGate],
         testCounts: EvidenceTestCounts? = nil,
-        testGateID: String? = nil,
         reviewRevision: String? = nil,
         residualRisks: [String] = []
     ) {
+        self.schemaVersion = schemaVersion
         self.sourceRepository = sourceRepository
         self.sourceRevision = sourceRevision
         self.engineVersion = engineVersion
@@ -89,7 +90,6 @@ public struct EvidenceProductionContext: Sendable {
         self.commands = commands
         self.gates = gates
         self.testCounts = testCounts
-        self.testGateID = testGateID
         self.reviewRevision = reviewRevision
         self.residualRisks = residualRisks
     }
@@ -127,6 +127,14 @@ public enum EvidenceProducer {
         profileSnapshot: ProfileSnapshot,
         expected: EvidenceExpectation
     ) throws -> QualityEvidence {
+        guard context.schemaVersion == 1 else {
+            throw EvidenceProductionError.invalidContext([
+                EvidenceVerificationIssue(
+                    code: "QC.EVIDENCE.UNSUPPORTED_CONTEXT_SCHEMA",
+                    message: "Evidence production context schemaVersion is unsupported."
+                )
+            ])
+        }
         let profileIssues = ProfileValidator.validate(profileSnapshot.profile)
         guard profileIssues.isEmpty else {
             throw EvidenceProductionError.invalidProfile(profileIssues)
@@ -180,6 +188,7 @@ public enum EvidenceProducer {
 }
 
 private struct EvidenceProductionDocument: Decodable {
+    let schemaVersion: Int
     let sourceRepository: String
     let sourceRevision: String
     let engineVersion: String
@@ -188,11 +197,11 @@ private struct EvidenceProductionDocument: Decodable {
     let commands: [EvidenceCommand]
     let gates: [EvidenceGate]
     let testCounts: EvidenceTestCounts?
-    let testGateID: String?
     let reviewRevision: String?
     let residualRisks: [String]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion
         case sourceRepository
         case sourceRevision
         case engineVersion
@@ -201,7 +210,6 @@ private struct EvidenceProductionDocument: Decodable {
         case commands
         case gates
         case testCounts
-        case testGateID
         case reviewRevision
         case residualRisks
     }
@@ -212,6 +220,10 @@ private struct EvidenceProductionDocument: Decodable {
             allowed: Set(CodingKeys.allCases.map(\.rawValue))
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == 1 else {
+            throw EvidenceProductionUnsupportedSchemaError()
+        }
         sourceRepository = try container.decode(String.self, forKey: .sourceRepository)
         sourceRevision = try container.decode(String.self, forKey: .sourceRevision)
         engineVersion = try container.decode(String.self, forKey: .engineVersion)
@@ -224,7 +236,6 @@ private struct EvidenceProductionDocument: Decodable {
             from: container,
             forKey: .testCounts
         )
-        testGateID = try decodeOptionalProductionValue(String.self, from: container, forKey: .testGateID)
         reviewRevision = try decodeOptionalProductionValue(
             String.self,
             from: container,
@@ -235,6 +246,7 @@ private struct EvidenceProductionDocument: Decodable {
 
     var context: EvidenceProductionContext {
         EvidenceProductionContext(
+            schemaVersion: schemaVersion,
             sourceRepository: sourceRepository,
             sourceRevision: sourceRevision,
             engineVersion: engineVersion,
@@ -243,7 +255,6 @@ private struct EvidenceProductionDocument: Decodable {
             commands: commands,
             gates: gates,
             testCounts: testCounts,
-            testGateID: testGateID,
             reviewRevision: reviewRevision,
             residualRisks: residualRisks
         )
@@ -251,3 +262,4 @@ private struct EvidenceProductionDocument: Decodable {
 }
 
 private struct EvidenceProductionDocumentLimitError: Error {}
+private struct EvidenceProductionUnsupportedSchemaError: Error {}
