@@ -13,12 +13,14 @@ struct EvidenceProductionTests {
     func validStaticRunProducesReadyEvidence() throws {
         let snapshot = profileSnapshot()
         let context = validContext()
+        let expected = trustedExpectation(for: context, profileSnapshot: snapshot)
 
-        let evidence = try EvidenceProducer.produce(context: context, profileSnapshot: snapshot)
-        let verification = EvidenceVerifier.verify(
-            evidence,
-            expected: EvidenceProducer.expectation(for: context, profileSnapshot: snapshot)
+        let evidence = try EvidenceProducer.produce(
+            context: context,
+            profileSnapshot: snapshot,
+            expected: expected
         )
+        let verification = EvidenceVerifier.verify(evidence, expected: expected)
 
         #expect(evidence.artifacts.isEmpty)
         #expect(evidence.claimedVerdict == .ready)
@@ -34,16 +36,15 @@ struct EvidenceProductionTests {
             (.notRunByUserDecision, .needsOwnerDecision)
         ] {
             let context = validContext(status: status)
-            let evidence = try EvidenceProducer.produce(context: context, profileSnapshot: profileSnapshot())
+            let evidence = try produce(context: context)
             #expect(evidence.claimedVerdict == expected)
         }
     }
 
     @Test("Residual risk prevents READY")
     func residualRiskPreventsReady() throws {
-        let evidence = try EvidenceProducer.produce(
-            context: validContext(residualRisks: ["Artifact snapshot attestation is unavailable."]),
-            profileSnapshot: profileSnapshot()
+        let evidence = try produce(
+            context: validContext(residualRisks: ["Artifact snapshot attestation is unavailable."])
         )
 
         #expect(evidence.claimedVerdict == .needsOwnerDecision)
@@ -51,7 +52,7 @@ struct EvidenceProductionTests {
 
     @Test("A snapshot hash is computed from the exact decoded profile bytes")
     func profileSnapshotHashMatchesBytes() throws {
-        let data = profileJSON.data(using: .utf8)!
+        let data = profileJSON().data(using: .utf8)!
         let expectedHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let url = try temporaryFile(data: data)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -91,7 +92,7 @@ struct EvidenceProductionTests {
         )
 
         #expect(throws: EvidenceProductionError.self) {
-            try EvidenceProducer.produce(context: context, profileSnapshot: profileSnapshot())
+            try produce(context: context)
         }
     }
 
@@ -123,9 +124,8 @@ struct EvidenceProductionTests {
             ]
         )
 
-        let evidence = try EvidenceProducer.produce(
+        let evidence = try produce(
             context: context,
-            profileSnapshot: profileSnapshot(),
             userAuthorizedActions: [.localTestExecution]
         )
 
@@ -154,7 +154,7 @@ struct EvidenceProductionTests {
         )
 
         #expect(throws: EvidenceProductionError.self) {
-            try EvidenceProducer.produce(context: context, profileSnapshot: profileSnapshot())
+            try produce(context: context)
         }
     }
 
@@ -178,7 +178,7 @@ struct EvidenceProductionTests {
         )
 
         #expect(throws: EvidenceProductionError.self) {
-            try EvidenceProducer.produce(context: context, profileSnapshot: profileSnapshot())
+            try produce(context: context)
         }
     }
 
@@ -204,16 +204,37 @@ struct EvidenceProductionTests {
         )
 
         #expect(throws: EvidenceProductionError.self) {
-            try EvidenceProducer.produce(context: context, profileSnapshot: profileSnapshot())
+            _ = try EvidenceProducer.produce(
+                context: context,
+                profileSnapshot: profileSnapshot(),
+                expected: trustedExpectation(for: validContext(), profileSnapshot: profileSnapshot())
+            )
         }
     }
 
     @Test("Semantically invalid profiles cannot produce evidence")
     func invalidProfileIsRejected() {
         #expect(throws: EvidenceProductionError.self) {
-            try EvidenceProducer.produce(
+            let snapshot = profileSnapshot(root: ".", cache: ".quality-control-cache")
+            _ = try EvidenceProducer.produce(
                 context: validContext(),
-                profileSnapshot: profileSnapshot(root: ".", cache: ".quality-control-cache")
+                profileSnapshot: snapshot,
+                expected: trustedExpectation(for: validContext(), profileSnapshot: snapshot)
+            )
+        }
+    }
+
+    @Test("Untrusted context outcomes cannot satisfy a trusted expectation")
+    func untrustedOutcomeCannotProduceReadyEvidence() {
+        let trustedContext = validContext()
+        let snapshot = profileSnapshot()
+        let untrustedContext = validContext(status: .fail)
+
+        #expect(throws: EvidenceProductionError.self) {
+            try EvidenceProducer.produce(
+                context: untrustedContext,
+                profileSnapshot: snapshot,
+                expected: trustedExpectation(for: trustedContext, profileSnapshot: snapshot)
             )
         }
     }
@@ -256,25 +277,67 @@ struct EvidenceProductionTests {
         root: String = "/sandbox",
         cache: String = "/sandbox/cache"
     ) -> ProfileSnapshot {
-        ProfileSnapshot(
-            profile: ProjectProfile(
-                schemaVersion: 1,
-                project: ProjectReference(kind: .xcodeProject, path: "App.xcodeproj"),
-                scheme: "App",
-                sourcePaths: ["Sources"],
-                mode: .controlled,
-                permissions: PermissionPolicy(
-                    testCreation: .allow,
-                    testModification: .allow,
-                    localTestExecution: .ask,
-                    githubExecution: .manual,
-                    uiTests: .deny,
-                    simulatorOrDevice: .deny,
-                    performanceOrInstruments: .deny
-                ),
-                sandbox: SandboxPaths(root: root, cache: cache)
-            ),
-            sha256: String(repeating: "d", count: 64)
+        try! ProfileSnapshot(data: Data(profileJSON(root: root, cache: cache).utf8))
+    }
+
+    private func produce(
+        context: EvidenceProductionContext,
+        profileSnapshot: ProfileSnapshot? = nil,
+        userAuthorizedActions: Set<PermissionAction> = []
+    ) throws -> QualityEvidence {
+        let snapshot = profileSnapshot ?? self.profileSnapshot()
+        return try EvidenceProducer.produce(
+            context: context,
+            profileSnapshot: snapshot,
+            expected: trustedExpectation(
+                for: context,
+                profileSnapshot: snapshot,
+                userAuthorizedActions: userAuthorizedActions
+            )
+        )
+    }
+
+    private func trustedExpectation(
+        for context: EvidenceProductionContext,
+        profileSnapshot: ProfileSnapshot,
+        userAuthorizedActions: Set<PermissionAction> = []
+    ) -> EvidenceExpectation {
+        let commands = Dictionary(
+            uniqueKeysWithValues: context.commands.map {
+                ($0.id, EvidenceCommandExpectation(
+                    commandSHA256: $0.commandSHA256,
+                    exitCode: $0.exitCode,
+                    actions: Set($0.actions)
+                ))
+            }
+        )
+        let gates = Dictionary(
+            uniqueKeysWithValues: context.gates.map {
+                ($0.id, EvidenceGateExpectation(
+                    commandID: $0.commandID,
+                    actions: Set($0.actions),
+                    status: $0.status,
+                    message: $0.message
+                ))
+            }
+        )
+        return EvidenceExpectation(
+            sourceRepository: context.sourceRepository,
+            sourceRevision: context.sourceRevision,
+            engineVersion: context.engineVersion,
+            engineRevision: context.engineRevision,
+            profileSchemaVersion: profileSnapshot.profile.schemaVersion,
+            profileSHA256: profileSnapshot.sha256,
+            toolchain: context.toolchain,
+            permissions: profileSnapshot.profile.permissions,
+            commandsByID: commands,
+            gatesByID: gates,
+            userAuthorizedActions: userAuthorizedActions,
+            testCounts: context.testCounts,
+            testGateID: context.testGateID,
+            reviewRevision: context.reviewRevision,
+            artifactSHA256ByPath: [:],
+            residualRisks: Set(context.residualRisks)
         )
     }
 
@@ -287,9 +350,12 @@ struct EvidenceProductionTests {
         return url
     }
 
-    private var profileJSON: String {
+    private func profileJSON(
+        root: String = "/sandbox",
+        cache: String = "/sandbox/cache"
+    ) -> String {
         """
-        {"schemaVersion":1,"project":{"kind":"xcodeproj","path":"App.xcodeproj"},"scheme":"App","sourcePaths":["Sources"],"mode":"controlled","permissions":{"testCreation":"allow","testModification":"allow","localTestExecution":"ask","githubExecution":"manual","uiTests":"deny","simulatorOrDevice":"deny","performanceOrInstruments":"deny"},"sandbox":{"root":".","cache":".quality-control-cache"}}
+        {"schemaVersion":1,"project":{"kind":"xcodeproj","path":"App.xcodeproj"},"scheme":"App","sourcePaths":["Sources"],"mode":"controlled","permissions":{"testCreation":"allow","testModification":"allow","localTestExecution":"ask","githubExecution":"manual","uiTests":"deny","simulatorOrDevice":"deny","performanceOrInstruments":"deny"},"sandbox":{"root":"\(root)","cache":"\(cache)"}}
         """
     }
 

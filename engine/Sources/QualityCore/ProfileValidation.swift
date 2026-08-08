@@ -242,17 +242,20 @@ private struct JSONDuplicateKeyParser {
 
 public enum ProfileLoader {
     public static func load(from url: URL) throws -> ProjectProfile {
-        try loadSnapshot(from: url).profile
+        try decodeProfile(
+            from: JSONDocumentConstraints.loadData(from: url)
+        )
     }
 
     public static func loadSnapshot(from url: URL) throws -> ProfileSnapshot {
         let data = try JSONDocumentConstraints.loadData(from: url)
+        return try ProfileSnapshot(data: data)
+    }
+
+    static func decodeProfile(from data: Data) throws -> ProjectProfile {
         try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
         try validateClosedObjectProperties(in: data)
-        return ProfileSnapshot(
-            profile: try JSONDecoder().decode(ProjectProfile.self, from: data),
-            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        )
+        return try JSONDecoder().decode(ProjectProfile.self, from: data)
     }
 
     private static func validateClosedObjectProperties(in data: Data) throws {
@@ -311,9 +314,12 @@ public struct ProfileSnapshot: Sendable {
     public let profile: ProjectProfile
     public let sha256: String
 
-    public init(profile: ProjectProfile, sha256: String) {
-        self.profile = profile
-        self.sha256 = sha256
+    public init(data: Data) throws {
+        guard data.count <= JSONDocumentConstraints.maximumBytes else {
+            throw JSONDocumentLimitError()
+        }
+        profile = try ProfileLoader.decodeProfile(from: data)
+        sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 

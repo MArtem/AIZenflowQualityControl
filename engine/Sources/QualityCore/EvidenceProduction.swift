@@ -96,7 +96,7 @@ public struct EvidenceProductionContext: Sendable {
 }
 
 public enum EvidenceProductionContextLoader {
-    public static let maximumDocumentBytes = 1_000_000
+    public static let maximumDocumentBytes = 3 * 1_024 * 1_024
 
     public static func load(from url: URL) throws -> EvidenceProductionContext {
         try decode(
@@ -125,7 +125,7 @@ public enum EvidenceProducer {
     public static func produce(
         context: EvidenceProductionContext,
         profileSnapshot: ProfileSnapshot,
-        userAuthorizedActions: Set<PermissionAction> = []
+        expected: EvidenceExpectation
     ) throws -> QualityEvidence {
         let profileIssues = ProfileValidator.validate(profileSnapshot.profile)
         guard profileIssues.isEmpty else {
@@ -154,58 +154,12 @@ public enum EvidenceProducer {
         )
         let verification = EvidenceVerifier.verify(
             evidence,
-            expected: expectation(
-                for: context,
-                profileSnapshot: profileSnapshot,
-                userAuthorizedActions: userAuthorizedActions
-            )
+            expected: expected
         )
         guard verification.issues.isEmpty else {
             throw EvidenceProductionError.invalidContext(verification.issues)
         }
         return evidence
-    }
-
-    static func expectation(
-        for context: EvidenceProductionContext,
-        profileSnapshot: ProfileSnapshot,
-        userAuthorizedActions: Set<PermissionAction> = []
-    ) -> EvidenceExpectation {
-        var commandsByID: [String: EvidenceCommandExpectation] = [:]
-        for command in context.commands where commandsByID[command.id] == nil {
-            commandsByID[command.id] = EvidenceCommandExpectation(
-                commandSHA256: command.commandSHA256,
-                exitCode: command.exitCode,
-                actions: Set(command.actions)
-            )
-        }
-        var gatesByID: [String: EvidenceGateExpectation] = [:]
-        for gate in context.gates where gatesByID[gate.id] == nil {
-            gatesByID[gate.id] = EvidenceGateExpectation(
-                commandID: gate.commandID,
-                actions: Set(gate.actions),
-                status: gate.status,
-                message: gate.message
-            )
-        }
-        return EvidenceExpectation(
-            sourceRepository: context.sourceRepository,
-            sourceRevision: context.sourceRevision,
-            engineVersion: context.engineVersion,
-            engineRevision: context.engineRevision,
-            profileSchemaVersion: profileSnapshot.profile.schemaVersion,
-            profileSHA256: profileSnapshot.sha256,
-            toolchain: context.toolchain,
-            permissions: profileSnapshot.profile.permissions,
-            commandsByID: commandsByID,
-            gatesByID: gatesByID,
-            userAuthorizedActions: userAuthorizedActions,
-            testCounts: context.testCounts,
-            testGateID: context.testGateID,
-            reviewRevision: context.reviewRevision,
-            artifactSHA256ByPath: [:],
-            residualRisks: Set(context.residualRisks)
-        )
     }
 
     private static func validateContextBounds(
