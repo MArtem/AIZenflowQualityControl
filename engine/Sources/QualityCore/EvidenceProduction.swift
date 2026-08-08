@@ -96,7 +96,7 @@ public struct EvidenceProductionContext: Sendable {
 }
 
 public enum EvidenceProductionContextLoader {
-    public static let maximumDocumentBytes = 3 * 1_024 * 1_024
+    public static let maximumDocumentBytes = 5 * 1_024 * 1_024
 
     public static func load(from url: URL) throws -> EvidenceProductionContext {
         try decode(
