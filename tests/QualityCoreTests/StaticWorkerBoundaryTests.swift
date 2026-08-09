@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import QualityCore
@@ -100,7 +101,13 @@ struct StaticWorkerBoundaryTests {
                 )
             ]
         )
-        let data = try JSONEncoder().encode(expected)
+        let data = try JSONEncoder().encode(
+            StaticWorkerResponse(
+                report: expected,
+                profileSHA256: String(repeating: "a", count: 64),
+                policySHA256: String(repeating: "b", count: 64)
+            )
+        )
         let result = BoundedProcessResult(
             output: data,
             terminationStatus: 0,
@@ -114,6 +121,28 @@ struct StaticWorkerBoundaryTests {
 
         #expect(report.status == .pass)
         #expect(report.checks.map(\.id) == ["QC.STATIC.SCAN"])
+    }
+
+    @Test("The worker binds its report to the exact profile and policy bytes it loaded")
+    func workerResponseRecordsExactInputDigests() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath, isDirectory: false)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let profileURL = repositoryRoot.appendingPathComponent("fixtures/profiles/valid-minimal.json")
+        let policyURL = repositoryRoot.appendingPathComponent("policies/static-policy.json")
+        let profileData = try Data(contentsOf: profileURL)
+        let policyData = try Data(contentsOf: policyURL)
+        let profileSnapshot = try ProfileSnapshot(data: profileData)
+
+        let response = QualityCommands.staticWorkerResponse(
+            profileURL: profileURL,
+            policyURL: policyURL,
+            repositoryRoot: repositoryRoot
+        )
+
+        #expect(response.profileSHA256 == profileSnapshot.sha256)
+        #expect(response.policySHA256 == digest(policyData))
     }
 
     @Test("The process runner drains bounded output and detects overflow")
@@ -163,6 +192,10 @@ struct StaticWorkerBoundaryTests {
     }
 }
 
+private func digest(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
 enum InvalidWorkerResult: String, CaseIterable, Sendable {
     case malformed
     case outputLimitExceeded
@@ -174,6 +207,10 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
     case emptyChecks
     case statusMismatch
     case exitMismatch
+    case missingPassingSnapshotDigests
+    case malformedSnapshotDigest
+    case unsupportedWorkerSchema
+    case unknownEnvelopeProperty
 
     func result() throws -> BoundedProcessResult {
         let passingReport = QualityReport(
@@ -182,7 +219,13 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
                 QualityCheck(id: "QC.STATIC.SCAN", status: .pass, message: "pass")
             ]
         )
-        let passingData = try JSONEncoder().encode(passingReport)
+        let passingData = try JSONEncoder().encode(
+            StaticWorkerResponse(
+                report: passingReport,
+                profileSHA256: String(repeating: "a", count: 64),
+                policySHA256: String(repeating: "b", count: 64)
+            )
+        )
 
         switch self {
         case .malformed:
@@ -217,6 +260,38 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
             return base(output: mismatched)
         case .exitMismatch:
             return base(output: passingData, terminationStatus: 1)
+        case .missingPassingSnapshotDigests:
+            let missingDigests = try JSONEncoder().encode(
+                StaticWorkerResponse(
+                    report: passingReport,
+                    profileSHA256: nil,
+                    policySHA256: nil
+                )
+            )
+            return base(output: missingDigests)
+        case .malformedSnapshotDigest:
+            let malformedDigest = try JSONEncoder().encode(
+                StaticWorkerResponse(
+                    report: passingReport,
+                    profileSHA256: "not-a-sha256",
+                    policySHA256: String(repeating: "b", count: 64)
+                )
+            )
+            return base(output: malformedDigest)
+        case .unsupportedWorkerSchema:
+            let response = try JSONSerialization.jsonObject(with: passingData)
+            guard var object = response as? [String: Any] else {
+                throw InvalidWorkerResultError.invalidFixture
+            }
+            object["schemaVersion"] = 2
+            return base(output: try JSONSerialization.data(withJSONObject: object))
+        case .unknownEnvelopeProperty:
+            let response = try JSONSerialization.jsonObject(with: passingData)
+            guard var object = response as? [String: Any] else {
+                throw InvalidWorkerResultError.invalidFixture
+            }
+            object["unexpected"] = true
+            return base(output: try JSONSerialization.data(withJSONObject: object))
         }
     }
 
@@ -237,4 +312,8 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
             outputDrainCompleted: outputDrainCompleted
         )
     }
+}
+
+private enum InvalidWorkerResultError: Error {
+    case invalidFixture
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum QualityStatus: String, Codable, Sendable {
@@ -310,6 +311,20 @@ private enum ProfileLoadResult {
     case failure(QualityCheck)
 }
 
+enum StaticScanDocument {
+    case data(Data)
+    case unavailable
+}
+
+private enum StaticScanDocumentError: Error {
+    case unavailable
+}
+
+struct StaticScanDocuments {
+    let profile: StaticScanDocument
+    let policy: StaticScanDocument
+}
+
 public enum QualityCommands {
     public static func validateEvidenceExpectation(at expectationURL: URL) -> QualityReport {
         do {
@@ -507,8 +522,38 @@ public enum QualityCommands {
             profileURL: profileURL,
             policyURL: policyURL,
             repositoryRoot: repositoryRoot,
+            documents: nil,
             limits: .production,
             deadlineExceeded: { _, _ in clock.now >= deadline }
+        )
+    }
+
+    package static func staticWorkerResponse(
+        profileURL: URL,
+        policyURL: URL,
+        repositoryRoot: URL
+    ) -> StaticWorkerResponse {
+        let profileDocument = loadStaticScanDocument(from: profileURL)
+        let policyDocument = loadStaticScanDocument(from: policyURL)
+        let documents = StaticScanDocuments(
+            profile: profileDocument.document,
+            policy: policyDocument.document
+        )
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
+        let report = staticScan(
+            profileURL: profileURL,
+            policyURL: policyURL,
+            repositoryRoot: repositoryRoot,
+            documents: documents,
+            limits: .production,
+            deadlineExceeded: { _, _ in clock.now >= deadline }
+        )
+
+        return StaticWorkerResponse(
+            report: report,
+            profileSHA256: profileDocument.sha256,
+            policySHA256: policyDocument.sha256
         )
     }
 
@@ -516,10 +561,11 @@ public enum QualityCommands {
         profileURL: URL,
         policyURL: URL,
         repositoryRoot: URL,
+        documents: StaticScanDocuments? = nil,
         limits: StaticScanLimits,
         deadlineExceeded: (_ scannedEntries: Int, _ reportedFindings: Int) -> Bool = { _, _ in false }
     ) -> QualityReport {
-        switch loadProfile(at: profileURL) {
+        switch loadProfile(at: profileURL, document: documents?.profile) {
         case let .failure(check):
             return QualityReport(command: "static", checks: [check])
         case let .success(profile):
@@ -530,7 +576,15 @@ public enum QualityCommands {
 
             let policy: StaticPolicy
             do {
-                let data = try JSONDocumentConstraints.loadData(from: policyURL)
+                let data: Data
+                switch documents?.policy {
+                case let .data(document):
+                    data = document
+                case .unavailable:
+                    throw StaticScanDocumentError.unavailable
+                case nil:
+                    data = try JSONDocumentConstraints.loadData(from: policyURL)
+                }
                 policy = try StaticPolicy.decode(from: data)
             } catch {
                 return QualityReport(
@@ -1020,10 +1074,20 @@ public enum QualityCommands {
     }
 
     private static func loadProfile(
-        at url: URL
+        at url: URL,
+        document: StaticScanDocument? = nil
     ) -> ProfileLoadResult {
         do {
-            return .success(try ProfileLoader.load(from: url))
+            let data: Data
+            switch document {
+            case let .data(value):
+                data = value
+            case .unavailable:
+                throw StaticScanDocumentError.unavailable
+            case nil:
+                data = try JSONDocumentConstraints.loadData(from: url)
+            }
+            return .success(try ProfileLoader.decodeProfile(from: data))
         } catch {
             return .failure(
                 QualityCheck(
@@ -1032,6 +1096,20 @@ public enum QualityCommands {
                     message: "Project profile could not be decoded."
                 )
             )
+        }
+    }
+
+    private static func loadStaticScanDocument(
+        from url: URL
+    ) -> (document: StaticScanDocument, sha256: String?) {
+        do {
+            let data = try JSONDocumentConstraints.loadData(from: url)
+            return (
+                .data(data),
+                SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            )
+        } catch {
+            return (.unavailable, nil)
         }
     }
 

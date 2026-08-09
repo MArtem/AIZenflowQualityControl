@@ -206,35 +206,52 @@ package enum StaticWorkerBoundary {
                 message: "Static worker exceeded the hard process deadline and was terminated."
             )
         }
-
         guard result.outputDrainCompleted else {
             return blocked(
                 id: "QC.STATIC.WORKER_OUTPUT_BLOCKED",
                 message: "Static worker output could not be drained within its bounded deadline."
             )
         }
-
         guard !result.outputLimitExceeded else {
             return blocked(
                 id: "QC.STATIC.WORKER_OUTPUT_LIMIT",
                 message: "Static worker output exceeded the immutable byte limit."
             )
         }
+        return validatedResponse(for: result)?.report ?? workerFailure()
+    }
+
+    package static func validatedResponse(
+        for result: BoundedProcessResult
+    ) -> StaticWorkerResponse? {
+        if result.timedOut {
+            return nil
+        }
+
+        guard result.outputDrainCompleted else {
+            return nil
+        }
+
+        guard !result.outputLimitExceeded else {
+            return nil
+        }
 
         guard result.exitedNormally,
               let terminationStatus = result.terminationStatus,
-              let decodedReport = try? JSONDecoder().decode(
-                  QualityReport.self,
+              let response = try? JSONDecoder().decode(
+                  StaticWorkerResponse.self,
                   from: result.output
               ),
-              decodedReport.schemaVersion == 1,
-              decodedReport.command == "static" else {
-            return workerFailure()
+              response.schemaVersion == StaticWorkerResponse.currentSchemaVersion,
+              response.report.schemaVersion == 1,
+              response.report.command == "static",
+              response.hasValidDigests else {
+            return nil
         }
 
         let normalizedReport = QualityReport(
-            command: decodedReport.command,
-            checks: decodedReport.checks
+            command: response.report.command,
+            checks: response.report.checks
         )
         let expectedExit: Int32
         switch normalizedReport.status {
@@ -246,12 +263,16 @@ package enum StaticWorkerBoundary {
             expectedExit = 2
         }
 
-        guard normalizedReport.status == decodedReport.status,
+        guard normalizedReport.status == response.report.status,
               terminationStatus == expectedExit else {
-            return workerFailure()
+            return nil
         }
 
-        return normalizedReport
+        return StaticWorkerResponse(
+            report: normalizedReport,
+            profileSHA256: response.profileSHA256,
+            policySHA256: response.policySHA256
+        )
     }
 
     private static func workerFailure() -> QualityReport {
@@ -273,4 +294,78 @@ package enum StaticWorkerBoundary {
             ]
         )
     }
+}
+
+package struct StaticWorkerResponse: Codable, Sendable {
+    package static let currentSchemaVersion = 1
+
+    package let schemaVersion: Int
+    package let report: QualityReport
+    package let profileSHA256: String?
+    package let policySHA256: String?
+
+    package init(
+        report: QualityReport,
+        profileSHA256: String?,
+        policySHA256: String?
+    ) {
+        schemaVersion = Self.currentSchemaVersion
+        self.report = report
+        self.profileSHA256 = profileSHA256
+        self.policySHA256 = policySHA256
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion
+        case report
+        case profileSHA256
+        case policySHA256
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let allKeys = try decoder.container(keyedBy: StaticWorkerResponseCodingKey.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard Set(allKeys.allKeys.map(\.stringValue))
+            == Set(CodingKeys.allCases.map(\.rawValue)) else {
+            throw StaticWorkerResponseDecodingError.invalidEnvelope
+        }
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        report = try container.decode(QualityReport.self, forKey: .report)
+        profileSHA256 = try container.decodeIfPresent(String.self, forKey: .profileSHA256)
+        policySHA256 = try container.decodeIfPresent(String.self, forKey: .policySHA256)
+    }
+
+    fileprivate var hasValidDigests: Bool {
+        if report.status == .pass,
+           (profileSHA256 == nil || policySHA256 == nil) {
+            return false
+        }
+        return [profileSHA256, policySHA256].allSatisfy { digest in
+            guard let digest else {
+                return true
+            }
+            return digest.count == 64 && digest.allSatisfy {
+                $0.isNumber || ($0 >= "a" && $0 <= "f")
+            }
+        }
+    }
+}
+
+private struct StaticWorkerResponseCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+private enum StaticWorkerResponseDecodingError: Error {
+    case invalidEnvelope
 }
