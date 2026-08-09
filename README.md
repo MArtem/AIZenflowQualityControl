@@ -24,16 +24,19 @@ The repository still contains no automatic push/PR workflow, hook, application p
 application integration. Stage 9A includes bounded artifact-hashing primitives behind an internal
 worker boundary, but production artifact evidence remains blocked until a dedicated OS-backed
 immutable-snapshot provider exists; a read-only mount flag alone is not sufficient proof. The
-engine does not create or mount privileged snapshots, and does not add an evidence producer,
-cryptographic attestation, or workflow evidence producer; those execution-boundary integrations
-remain separate work and no current diagnostic is promoted to authoritative release proof.
+engine does not create or mount privileged snapshots. Its in-memory evidence producer and
+package-internal static coordinator require coordinator-owned observations; neither adds a public
+execution-boundary or workflow evidence producer, cryptographic attestation, or authoritative
+release proof.
 Stage 9C1 adds only `validate-evidence-expectation`: it validates the bounded closed document
 envelope and explicitly does not turn a caller-supplied file into trusted evidence or a verdict.
 The public `quality static` command now isolates the cooperative scanner in a child process, applies
 a 245-second local hard ceiling, dynamically shortens it to preserve the five-minute workflow job
 budget, terminates the worker when its authenticated parent exits, bounds captured JSON to 8 MiB,
-and validates report/exit consistency before forwarding a result. Buildable Xcode fixtures remain
-separate work and are not claimed by this boundary.
+and validates report/exit consistency before forwarding a result. The internal coordinator converts
+only that validated response plus separately observed identity/profile facts into in-memory static
+evidence; it accepts no expectation or evidence JSON. Buildable Xcode fixtures remain separate work
+and are not claimed by this boundary.
 
 ## Authority Boundary
 
@@ -77,12 +80,15 @@ The package has no third-party dependencies and declares a macOS 13 minimum. Aft
 
 ```text
 swift run quality validate-profile --profile <profile.json>
+swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
 ```
 
 - `validate-profile` decodes schema version 1 and rejects missing, absolute, duplicate, or
   traversal-bearing project/source paths.
+- `validate-evidence-expectation` validates only a bounded, closed document envelope; the caller-
+  supplied document remains untrusted and does not produce an evidence verdict.
 - `doctor` verifies configured repository, project/workspace, source, and sandbox paths without
   running Xcode, builds, or tests.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink

@@ -218,12 +218,12 @@ package enum StaticWorkerBoundary {
                 message: "Static worker output exceeded the immutable byte limit."
             )
         }
-        return validatedResponse(for: result)?.report ?? workerFailure()
+        return validatedObservation(for: result)?.report ?? workerFailure()
     }
 
-    package static func validatedResponse(
+    package static func validatedObservation(
         for result: BoundedProcessResult
-    ) -> StaticWorkerResponse? {
+    ) -> ValidatedStaticWorkerObservation? {
         if result.timedOut {
             return nil
         }
@@ -279,7 +279,7 @@ package enum StaticWorkerBoundary {
             return nil
         }
 
-        return StaticWorkerResponse(
+        return ValidatedStaticWorkerObservation(
             report: normalizedReport,
             profileSHA256: response.profileSHA256,
             policySHA256: response.policySHA256
@@ -304,6 +304,22 @@ package enum StaticWorkerBoundary {
                 )
             ]
         )
+    }
+}
+
+package struct ValidatedStaticWorkerObservation: Sendable {
+    package let report: QualityReport
+    package let profileSHA256: String?
+    package let policySHA256: String?
+
+    fileprivate init(
+        report: QualityReport,
+        profileSHA256: String?,
+        policySHA256: String?
+    ) {
+        self.report = report
+        self.profileSHA256 = profileSHA256
+        self.policySHA256 = policySHA256
     }
 }
 
