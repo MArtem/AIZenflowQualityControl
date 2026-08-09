@@ -279,6 +279,7 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
     case malformedSnapshotDigest
     case unsupportedWorkerSchema
     case unknownEnvelopeProperty
+    case duplicateEnvelopeKey
     case nonASCIISnapshotDigest
     case unboundFailSnapshotDigests
     case unboundBlockedSnapshotDigests
@@ -363,6 +364,12 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
             }
             object["unexpected"] = true
             return base(output: try JSONSerialization.data(withJSONObject: object))
+        case .duplicateEnvelopeKey:
+            let duplicateReport = #"{"checks":[{"id":"QC.STATIC.SCAN","message":"pass","status":"PASS"}],"command":"static","schemaVersion":1,"status":"PASS"}"#
+            let duplicateEnvelope = """
+            {"schemaVersion":1,"report":\(duplicateReport),"report":\(duplicateReport),"profileSHA256":"\(String(repeating: "a", count: 64))","policySHA256":"\(String(repeating: "b", count: 64))"}
+            """
+            return base(output: Data(duplicateEnvelope.utf8))
         case .nonASCIISnapshotDigest:
             let nonASCII = try JSONEncoder().encode(
                 StaticWorkerResponse(

@@ -237,11 +237,22 @@ package enum StaticWorkerBoundary {
         }
 
         guard result.exitedNormally,
-              let terminationStatus = result.terminationStatus,
-              let response = try? JSONDecoder().decode(
-                  StaticWorkerResponse.self,
-                  from: result.output
-              ),
+              let terminationStatus = result.terminationStatus else {
+            return nil
+        }
+
+        let response: StaticWorkerResponse
+        do {
+            try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: result.output)
+            response = try JSONDecoder().decode(
+                StaticWorkerResponse.self,
+                from: result.output
+            )
+        } catch {
+            return nil
+        }
+
+        guard
               response.schemaVersion == StaticWorkerResponse.currentSchemaVersion,
               response.report.schemaVersion == 1,
               response.report.command == "static",
