@@ -179,6 +179,40 @@ struct StaticWorkerBoundaryTests {
         #expect(report.checks.map(\.id) == ["QC.PROFILE.UNREADABLE"])
     }
 
+    @Test("A profile contract failure may preserve an unavailable policy snapshot")
+    func profileFailureWithUnavailablePolicyIsPreserved() throws {
+        let expected = QualityReport(
+            command: "static",
+            checks: [
+                QualityCheck(
+                    id: "QC.PROFILE.INVALID_SANDBOX_ROOT",
+                    status: .fail,
+                    message: "Sandbox root must be absolute."
+                )
+            ]
+        )
+        let data = try JSONEncoder().encode(
+            StaticWorkerResponse(
+                report: expected,
+                profileSHA256: String(repeating: "a", count: 64),
+                policySHA256: nil
+            )
+        )
+        let result = BoundedProcessResult(
+            output: data,
+            terminationStatus: 1,
+            exitedNormally: true,
+            timedOut: false,
+            outputLimitExceeded: false,
+            outputDrainCompleted: true
+        )
+
+        let report = StaticWorkerBoundary.report(for: result)
+
+        #expect(report.status == .fail)
+        #expect(report.checks.map(\.id) == ["QC.PROFILE.INVALID_SANDBOX_ROOT"])
+    }
+
     @Test("The process runner drains bounded output and detects overflow")
     func processRunnerBoundsOutput() throws {
         let boundedProcess = Process()
