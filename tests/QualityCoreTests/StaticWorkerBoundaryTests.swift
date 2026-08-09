@@ -246,6 +246,8 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
     case unsupportedWorkerSchema
     case unknownEnvelopeProperty
     case nonASCIISnapshotDigest
+    case unboundFailSnapshotDigests
+    case unboundBlockedSnapshotDigests
 
     func result() throws -> BoundedProcessResult {
         let passingReport = QualityReport(
@@ -336,6 +338,44 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
                 )
             )
             return base(output: nonASCII)
+        case .unboundFailSnapshotDigests:
+            let failingReport = QualityReport(
+                command: "static",
+                checks: [
+                    QualityCheck(
+                        id: "QC.STATIC.FORBIDDEN_ARTIFACT",
+                        status: .fail,
+                        message: "forbidden"
+                    )
+                ]
+            )
+            let unboundFailure = try JSONEncoder().encode(
+                StaticWorkerResponse(
+                    report: failingReport,
+                    profileSHA256: nil,
+                    policySHA256: nil
+                )
+            )
+            return base(output: unboundFailure, terminationStatus: 1)
+        case .unboundBlockedSnapshotDigests:
+            let blockedReport = QualityReport(
+                command: "static",
+                checks: [
+                    QualityCheck(
+                        id: "QC.STATIC.TIMEOUT",
+                        status: .blocked,
+                        message: "timed out"
+                    )
+                ]
+            )
+            let unboundBlocked = try JSONEncoder().encode(
+                StaticWorkerResponse(
+                    report: blockedReport,
+                    profileSHA256: nil,
+                    policySHA256: nil
+                )
+            )
+            return base(output: unboundBlocked, terminationStatus: 2)
         }
     }
 

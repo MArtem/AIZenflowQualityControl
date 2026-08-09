@@ -352,16 +352,16 @@ package struct StaticWorkerResponse: Codable, Sendable {
     }
 
     fileprivate var hasValidDigests: Bool {
-        if report.status == .pass,
-           (profileSHA256 == nil || policySHA256 == nil) {
+        let profileDigestIsValid = profileSHA256.map(isLowercaseSHA256) ?? false
+        let policyDigestIsValid = policySHA256.map(isLowercaseSHA256) ?? false
+        guard (profileSHA256 == nil || profileDigestIsValid)
+            && (policySHA256 == nil || policyDigestIsValid) else {
             return false
         }
-        return [profileSHA256, policySHA256].allSatisfy { digest in
-            guard let digest else {
-                return true
-            }
-            return isLowercaseSHA256(digest)
+        if profileDigestIsValid && policyDigestIsValid {
+            return true
         }
+        return missingDigestsMatchUnreadableInputs
     }
 
     private func isLowercaseSHA256(_ digest: String) -> Bool {
@@ -369,6 +369,21 @@ package struct StaticWorkerResponse: Codable, Sendable {
         return bytes.count == 64 && bytes.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
+    }
+
+    private var missingDigestsMatchUnreadableInputs: Bool {
+        let unreadableInputIDs: Set<String> = [
+            "QC.PROFILE.UNREADABLE",
+            "QC.POLICY.UNREADABLE"
+        ]
+        let checkIDs = Set(report.checks.map(\.id))
+        guard report.status == .fail,
+              !checkIDs.isEmpty,
+              checkIDs.isSubset(of: unreadableInputIDs) else {
+            return false
+        }
+        return (profileSHA256 == nil && checkIDs.contains("QC.PROFILE.UNREADABLE"))
+            || (policySHA256 == nil && checkIDs.contains("QC.POLICY.UNREADABLE"))
     }
 }
 
