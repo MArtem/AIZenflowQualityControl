@@ -9,7 +9,7 @@ contracts, and bounded artifact-hashing primitives behind an internal worker bou
 artifact evidence remains blocked until a dedicated OS-backed immutable-snapshot provider exists:
 a read-only mount flag alone does not prove that a remote server or another mount cannot alter the
 data. The engine does not create or mount privileged snapshots. The contracts fail closed against
-caller-supplied trusted expectations, but no evidence producer or
+caller-supplied trusted expectations, but no CLI, workflow, artifact-capable, or execution-boundary evidence producer or
 cryptographic attestation exists yet. Future execution surfaces must consult the permission
 evaluator before acting and must not infer user authorization from untrusted evidence.
 `quality validate-evidence-expectation` is a structural validator only; its input remains

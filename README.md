@@ -77,6 +77,7 @@ The package has no third-party dependencies and declares a macOS 13 minimum. Aft
 
 ```text
 swift run quality validate-profile --profile <profile.json>
+swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
 ```
