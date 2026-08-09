@@ -78,6 +78,7 @@ private func emitStaticEvidence(_ result: StaticEvidenceExecutionResult) -> Neve
         print(output)
     } else {
         print(#"{"command":"static-evidence","evidence":null,"report":{"checks":[{"id":"QC.STATIC_EVIDENCE.OUTPUT_FAILURE","message":"Static evidence output could not be encoded within its bounded envelope.","status":"BLOCKED"}],"command":"static","schemaVersion":1,"status":"BLOCKED"},"schemaVersion":1,"status":"BLOCKED","verification":null}"#)
+        exit(2)
     }
 
     switch result.status {
@@ -273,8 +274,26 @@ private let boundedSubprocessOutputBytes = 64 * 1_024
 private func boundedToolOutput(
     executable: String,
     arguments: [String],
-    currentDirectoryURL: URL? = nil
+    currentDirectoryURL: URL? = nil,
+    maximumOutputBytes: Int = boundedSubprocessOutputBytes
 ) -> String? {
+    guard let data = boundedToolData(
+        executable: executable,
+        arguments: arguments,
+        currentDirectoryURL: currentDirectoryURL,
+        maximumOutputBytes: maximumOutputBytes
+    ), let output = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    return output.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func boundedToolData(
+    executable: String,
+    arguments: [String],
+    currentDirectoryURL: URL? = nil,
+    maximumOutputBytes: Int = boundedSubprocessOutputBytes
+) -> Data? {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -292,16 +311,15 @@ private func boundedToolOutput(
     guard let result = try? BoundedProcessRunner.run(
         process,
         timeoutSeconds: boundedSubprocessTimeout,
-        maximumOutputBytes: boundedSubprocessOutputBytes
+        maximumOutputBytes: maximumOutputBytes
     ), result.exitedNormally,
        result.terminationStatus == 0,
        !result.timedOut,
        !result.outputLimitExceeded,
-       result.outputDrainCompleted,
-       let output = String(data: result.output, encoding: .utf8) else {
+       result.outputDrainCompleted else {
         return nil
     }
-    return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    return result.output
 }
 
 private func canonicalDirectory(_ url: URL) -> URL? {
@@ -336,16 +354,6 @@ private func observedGitCheckout(at requestedRoot: URL) -> GitCheckoutObservatio
         return nil
     }
     return GitCheckoutObservation(root: root, revision: revision, origin: origin)
-}
-
-private func hasIgnoredSourceContent(root: URL, sourcePaths: [String]) -> Bool {
-    guard !sourcePaths.isEmpty else {
-        return true
-    }
-    return boundedToolOutput(
-        executable: "/usr/bin/git",
-        arguments: ["-C", root.path, "status", "--porcelain=v1", "--ignored=matching", "--"] + sourcePaths
-    ) != ""
 }
 
 private func githubRepositoryIdentity(from remote: String) -> String? {
@@ -391,6 +399,7 @@ private func runStaticEvidence(
     policyURL: URL,
     sourceRoot: URL,
     engineRoot: URL,
+    snapshotRoot: URL,
     expectedSourceRepository: String,
     expectedSourceRevision: String,
     expectedEngineRevision: String
@@ -399,16 +408,11 @@ private func runStaticEvidence(
           isLowercaseHex(expectedEngineRevision, count: 40) else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_EXPECTED_REVISION", "Expected revisions must be lowercase 40-byte Git object IDs.")
     }
+    guard EngineBuildProvenance.isTrusted,
+          EngineBuildProvenance.revision == expectedEngineRevision else {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.EXECUTABLE_UNTRUSTED", "The running executable was not built from the asserted clean engine revision.")
+    }
     let deadlineEpochSeconds = String(Date().timeIntervalSince1970 + StaticWorkerBoundary.hardTimeoutSeconds)
-    let snapshots: StaticEvidenceInputSnapshots
-    do {
-        snapshots = try StaticEvidenceInputSnapshots.load(profileURL: profileURL, policyURL: policyURL)
-    } catch {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SNAPSHOT_UNAVAILABLE", "Profile or policy snapshot could not be read through the bounded input boundary.")
-    }
-    guard ProfileValidator.validate(snapshots.profileSnapshot.profile).isEmpty else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_PROFILE", "The profile snapshot is not semantically valid for static evidence execution.")
-    }
     guard let source = observedGitCheckout(at: sourceRoot),
           let engine = observedGitCheckout(at: engineRoot),
           githubRepositoryIdentity(from: source.origin) == expectedSourceRepository,
@@ -417,20 +421,39 @@ private func runStaticEvidence(
           engine.revision == expectedEngineRevision else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.CHECKOUT_UNTRUSTED", "Source or engine checkout identity, revision, root, or cleanliness could not be verified.")
     }
-    guard !hasIgnoredSourceContent(root: source.root, sourcePaths: snapshots.profileSnapshot.profile.sourcePaths) else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.IGNORED_SOURCE", "Ignored content exists inside a configured source path.")
-    }
     let canonicalPolicyURL = policyURL.resolvingSymlinksInPath().standardizedFileURL
     guard isDescendant(canonicalPolicyURL, of: engine.root) else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.POLICY_UNTRUSTED", "The static policy must be a Git-tracked regular file inside the verified engine checkout.")
     }
     let policyRelativePath = String(canonicalPolicyURL.path.dropFirst(engine.root.path.count + 1))
-    guard
-          boundedToolOutput(
+    guard let policyData = boundedToolData(
             executable: "/usr/bin/git",
-            arguments: ["-C", engine.root.path, "ls-files", "--error-unmatch", "--", policyRelativePath]
-          ) != nil else {
+            arguments: ["-C", engine.root.path, "show", "\(engine.revision):\(policyRelativePath)"],
+            maximumOutputBytes: StaticEvidenceInputSnapshots.maximumInputBytes
+          ) else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.POLICY_UNTRUSTED", "The static policy must be a Git-tracked regular file inside the verified engine checkout.")
+    }
+    let snapshots: StaticEvidenceInputSnapshots
+    do {
+        snapshots = try StaticEvidenceInputSnapshots.load(profileURL: profileURL, policyData: policyData)
+    } catch {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SNAPSHOT_UNAVAILABLE", "Profile or policy snapshot could not be read through the bounded input boundary.")
+    }
+    guard ProfileValidator.validate(snapshots.profileSnapshot.profile).isEmpty else {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_PROFILE", "The profile snapshot is not semantically valid for static evidence execution.")
+    }
+    guard let manifest = boundedToolData(
+        executable: "/usr/bin/git",
+        arguments: ["-C", source.root.path, "ls-tree", "-r", "-z", "-l", "--full-tree", source.revision, "--"] + snapshots.profileSnapshot.profile.sourcePaths.map { ":(literal)\($0)" },
+        maximumOutputBytes: GitTreeStaticSnapshot.maximumManifestBytes
+    ) else {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_TREE_UNAVAILABLE", "The exact source Git tree could not be observed within its bounded envelope.")
+    }
+    let sourceSnapshot: GitTreeStaticSnapshot
+    do {
+        sourceSnapshot = try GitTreeStaticSnapshot(manifest: manifest)
+    } catch {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_TREE_INVALID", "The exact source Git tree manifest was malformed or exceeded its immutable limits.")
     }
     guard let swiftVersion = boundedToolOutput(executable: "/usr/bin/xcrun", arguments: ["swift", "--version"]),
           let xcodeVersion = boundedToolOutput(executable: "/usr/bin/xcrun", arguments: ["xcodebuild", "-version"]),
@@ -439,10 +462,36 @@ private func runStaticEvidence(
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.TOOLCHAIN_UNAVAILABLE", "The selected Swift or Xcode toolchain could not be observed within its bounded envelope.")
     }
 
+    let materialization: URL
+    let inputDirectory: URL
+    do {
+        materialization = try sourceSnapshot.materialize(
+            in: snapshotRoot,
+            sourcePaths: snapshots.profileSnapshot.profile.sourcePaths
+        )
+        inputDirectory = snapshotRoot.appendingPathComponent(
+            "static-evidence-input-" + UUID().uuidString,
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: inputDirectory, withIntermediateDirectories: false)
+        try snapshots.profileData.write(
+            to: inputDirectory.appendingPathComponent("profile.json"),
+            options: .atomic
+        )
+        try snapshots.policyData.write(
+            to: inputDirectory.appendingPathComponent("policy.json"),
+            options: .atomic
+        )
+        try GitTreeStaticSnapshot.sealMaterialization(at: materialization)
+    } catch {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be materialized as a private read-only scan view.")
+    }
+    defer { try? GitTreeStaticSnapshot.removeMaterialization(at: materialization) }
+    defer { try? FileManager.default.removeItem(at: inputDirectory) }
     let worker = runStaticWorkerExecution(
-        profileURL: profileURL,
-        policyURL: policyURL,
-        repositoryRoot: source.root,
+        profileURL: inputDirectory.appendingPathComponent("profile.json"),
+        policyURL: inputDirectory.appendingPathComponent("policy.json"),
+        repositoryRoot: materialization,
         deadlineEpochSeconds: deadlineEpochSeconds
     )
     guard let observation = worker.observation else {
@@ -453,9 +502,7 @@ private func runStaticEvidence(
           observation.policySHA256 == snapshots.policySHA256 else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SNAPSHOT_MISMATCH", "Worker snapshot digests did not match the parent-observed profile and policy bytes.")
     }
-    guard observedGitCheckout(at: source.root) == source,
-          observedGitCheckout(at: engine.root) == engine,
-          !hasIgnoredSourceContent(root: source.root, sourcePaths: snapshots.profileSnapshot.profile.sourcePaths) else {
+    guard observedGitCheckout(at: engine.root) == engine else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.CHECKOUT_CHANGED", "Source or engine checkout changed during static execution.")
     }
     do {
@@ -536,7 +583,7 @@ do {
             arguments.dropFirst(2),
             allowed: [
                 "--profile", "--policy", "--repository-root", "--engine-repository-root",
-                "--source-repository", "--expected-source-revision", "--expected-engine-revision"
+                "--snapshot-root", "--source-repository", "--expected-source-revision", "--expected-engine-revision"
             ]
         )
         emitStaticEvidence(
@@ -545,6 +592,7 @@ do {
                 policyURL: fileURL(try required("--policy", in: options)),
                 sourceRoot: fileURL(try required("--repository-root", in: options)),
                 engineRoot: fileURL(try required("--engine-repository-root", in: options)),
+                snapshotRoot: fileURL(try required("--snapshot-root", in: options)),
                 expectedSourceRepository: try required("--source-repository", in: options),
                 expectedSourceRevision: try required("--expected-source-revision", in: options),
                 expectedEngineRevision: try required("--expected-engine-revision", in: options)

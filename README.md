@@ -86,7 +86,7 @@ swift run quality validate-profile --profile <profile.json>
 swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
-swift run quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex>
+swift run quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-empty-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex>
 ```
 
 - `validate-profile` decodes schema version 1 and rejects missing, absolute, duplicate, or
@@ -97,8 +97,9 @@ swift run quality static-evidence --profile <profile.json> --policy <policy.json
   running Xcode, builds, or tests.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
   checks from explicit profile and policy inputs.
-- `static-evidence` emits a versioned result envelope. `PASS` includes evidence and an empty-issue
-  verifier result; preflight, snapshot, process, or checkout failures are evidence-free `BLOCKED`.
+- `static-evidence` materializes a private read-only scan view from the asserted Git tree; it never
+  scans mutable source-worktree bytes. `PASS` includes evidence and an empty-issue verifier result;
+  preflight, snapshot, process, or checkout failures are evidence-free `BLOCKED`.
 
 Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
 unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.

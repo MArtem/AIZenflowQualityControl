@@ -1,18 +1,39 @@
 import CryptoKit
 import Foundation
 
+package enum StaticEvidenceResultLimits {
+    package static let maximumChecks = 2_048
+    package static let maximumStringScalars = 1_024
+}
+
 /// Exact, descriptor-pinned inputs observed by the public static-evidence boundary.
 package struct StaticEvidenceInputSnapshots: Sendable {
+    package static let maximumInputBytes = 1_000_000
     package let profileSnapshot: ProfileSnapshot
+    package let profileData: Data
+    package let policyData: Data
     package let policySHA256: String
 
     package static func load(profileURL: URL, policyURL: URL) throws -> Self {
-        let profileSnapshot = try ProfileLoader.loadSnapshot(from: profileURL)
         let policyData = try JSONDocumentConstraints.loadData(from: policyURL)
-        return Self(
-            profileSnapshot: profileSnapshot,
-            policySHA256: SHA256.hash(data: policyData).map { String(format: "%02x", $0) }.joined()
-        )
+        return try Self.load(profileURL: profileURL, policyData: policyData)
+    }
+
+    package static func load(profileURL: URL, policyData: Data) throws -> Self {
+        let profileData = try JSONDocumentConstraints.loadData(from: profileURL)
+        return try Self(profileData: profileData, policyData: policyData)
+    }
+
+    package init(profileData: Data, policyData: Data) throws {
+        let profileSnapshot = try ProfileSnapshot(data: profileData)
+        guard policyData.count <= JSONDocumentConstraints.maximumBytes else {
+            throw GitTreeStaticSnapshotError.limitExceeded
+        }
+        try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: policyData)
+        self.profileSnapshot = profileSnapshot
+        self.profileData = profileData
+        self.policyData = policyData
+        policySHA256 = SHA256.hash(data: policyData).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -29,10 +50,10 @@ public struct StaticEvidenceExecutionResult: Encodable, Sendable {
     public let evidence: QualityEvidence?
     public let verification: EvidenceVerification?
 
-    public init(report: QualityReport) {
+    package init(report: QualityReport) {
         schemaVersion = Self.currentSchemaVersion
         command = "static-evidence"
-        if report.status == .pass {
+        if report.command != "static" || report.status == .pass {
             self.report = QualityReport(
                 command: "static",
                 checks: [

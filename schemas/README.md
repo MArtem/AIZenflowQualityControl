@@ -41,5 +41,6 @@ the loader cap. Residual-risk entries are unique in both layers.
 `static-evidence-result.schema.json` defines the versioned closed public envelope for
 `quality static-evidence`. It contains the normalized static report and includes evidence plus
 verification together only after the execution boundary's coordinator/verifier path succeeds. A
-`PASS` result therefore requires both values; evidence-free boundary failures remain `BLOCKED` and
-do not imply that a build, tests, UI/device check, review, or attestation happened.
+`PASS` result therefore requires `READY` evidence, a `READY` verification with zero issues, and a
+matching `PASS` report. Evidence-free boundary failures remain `BLOCKED` and do not imply that a
+build, tests, UI/device check, review, or attestation happened.

@@ -123,6 +123,30 @@ struct StaticWorkerBoundaryTests {
         #expect(report.checks.map(\.id) == ["QC.STATIC.SCAN"])
     }
 
+    @Test("A static evidence worker report cannot exceed the public schema check ceiling")
+    func reportCheckLimitFailsClosed() throws {
+        let checks = (0...StaticEvidenceResultLimits.maximumChecks).map { index in
+            QualityCheck(id: "QC.STATIC.\(index)", status: .pass, message: "Passed.")
+        }
+        let data = try JSONEncoder().encode(
+            StaticWorkerResponse(
+                report: QualityReport(command: "static", checks: checks),
+                profileSHA256: String(repeating: "a", count: 64),
+                policySHA256: String(repeating: "b", count: 64)
+            )
+        )
+        let result = BoundedProcessResult(
+            output: data,
+            terminationStatus: 0,
+            exitedNormally: true,
+            timedOut: false,
+            outputLimitExceeded: false,
+            outputDrainCompleted: true
+        )
+
+        #expect(StaticWorkerBoundary.report(for: result).status == .blocked)
+    }
+
     @Test("The worker binds its report to the exact profile and policy bytes it loaded")
     func workerResponseRecordsExactInputDigests() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath, isDirectory: false)

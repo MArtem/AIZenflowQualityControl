@@ -256,6 +256,7 @@ package enum StaticWorkerBoundary {
               response.schemaVersion == StaticWorkerResponse.currentSchemaVersion,
               response.report.schemaVersion == 1,
               response.report.command == "static",
+              hasValidReportEnvelope(response.report),
               response.hasValidDigests else {
             return nil
         }
@@ -291,6 +292,30 @@ package enum StaticWorkerBoundary {
             id: "QC.STATIC.WORKER_FAILURE",
             message: "Static worker did not return a valid report and matching terminal exit."
         )
+    }
+
+    private static func hasValidReportEnvelope(_ report: QualityReport) -> Bool {
+        guard !report.checks.isEmpty,
+              report.checks.count <= StaticEvidenceResultLimits.maximumChecks else {
+            return false
+        }
+        return report.checks.allSatisfy { check in
+            isBoundedNonEmptyString(check.id)
+                && isBoundedNonEmptyString(check.message)
+                && (check.path == nil || isBoundedNonEmptyString(check.path!))
+        }
+    }
+
+    private static func isBoundedNonEmptyString(_ value: String) -> Bool {
+        var count = 0
+        var hasNonWhitespace = false
+        for scalar in value.unicodeScalars.prefix(StaticEvidenceResultLimits.maximumStringScalars + 1) {
+            count += 1
+            if scalar != " " && scalar != "\t" && scalar != "\n" && scalar != "\r" {
+                hasNonWhitespace = true
+            }
+        }
+        return count <= StaticEvidenceResultLimits.maximumStringScalars && hasNonWhitespace
     }
 
     private static func blocked(id: String, message: String) -> QualityReport {

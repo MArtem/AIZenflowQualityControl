@@ -13,20 +13,38 @@
     "evidence": { "oneOf": [{ "type": "null" }, { "$ref": "quality-evidence.schema.json" }] },
     "verification": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] }
   },
-  "allOf": [
+  "oneOf": [
     {
-      "if": { "properties": { "status": { "const": "PASS" } } },
-      "then": {
-        "properties": {
-          "report": { "properties": { "status": { "const": "PASS" } } },
-          "evidence": { "$ref": "quality-evidence.schema.json" },
-          "verification": { "$ref": "#/$defs/verification" }
-        }
+      "properties": {
+        "status": { "const": "PASS" },
+        "report": { "properties": { "status": { "const": "PASS" } } },
+        "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "READY" } } }] },
+        "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "READY" }, "issues": { "maxItems": 0 } } }] }
       }
     },
     {
-      "if": { "properties": { "evidence": { "type": "null" } } },
-      "then": { "properties": { "verification": { "type": "null" } } }
+      "properties": {
+        "status": { "const": "FAIL" },
+        "report": { "properties": { "status": { "const": "FAIL" } } },
+        "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "NOT_READY" } } }] },
+        "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "NOT_READY" }, "issues": { "maxItems": 0 } } }] }
+      }
+    },
+    {
+      "properties": {
+        "status": { "const": "BLOCKED" },
+        "report": { "properties": { "status": { "const": "BLOCKED" } } },
+        "evidence": { "type": "null" },
+        "verification": { "type": "null" }
+      }
+    },
+    {
+      "properties": {
+        "status": { "const": "BLOCKED" },
+        "report": { "properties": { "status": { "const": "BLOCKED" } } },
+        "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "BLOCKED" } } }] },
+        "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "BLOCKED" }, "issues": { "maxItems": 0 } } }] }
+      }
     }
   ],
   "$defs": {
@@ -41,7 +59,7 @@
         "checks": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 256,
+          "maxItems": 2048,
           "items": {
             "type": "object",
             "additionalProperties": false,
