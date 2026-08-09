@@ -145,6 +145,40 @@ struct StaticWorkerBoundaryTests {
         #expect(response.policySHA256 == digest(policyData))
     }
 
+    @Test("Unreadable input reports preserve explicit null snapshot digests")
+    func unreadableInputReportIsPreserved() throws {
+        let expected = QualityReport(
+            command: "static",
+            checks: [
+                QualityCheck(
+                    id: "QC.PROFILE.UNREADABLE",
+                    status: .fail,
+                    message: "Project profile could not be decoded."
+                )
+            ]
+        )
+        let data = try JSONEncoder().encode(
+            StaticWorkerResponse(
+                report: expected,
+                profileSHA256: nil,
+                policySHA256: nil
+            )
+        )
+        let result = BoundedProcessResult(
+            output: data,
+            terminationStatus: 1,
+            exitedNormally: true,
+            timedOut: false,
+            outputLimitExceeded: false,
+            outputDrainCompleted: true
+        )
+
+        let report = StaticWorkerBoundary.report(for: result)
+
+        #expect(report.status == .fail)
+        #expect(report.checks.map(\.id) == ["QC.PROFILE.UNREADABLE"])
+    }
+
     @Test("The process runner drains bounded output and detects overflow")
     func processRunnerBoundsOutput() throws {
         let boundedProcess = Process()
@@ -211,6 +245,7 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
     case malformedSnapshotDigest
     case unsupportedWorkerSchema
     case unknownEnvelopeProperty
+    case nonASCIISnapshotDigest
 
     func result() throws -> BoundedProcessResult {
         let passingReport = QualityReport(
@@ -292,6 +327,15 @@ enum InvalidWorkerResult: String, CaseIterable, Sendable {
             }
             object["unexpected"] = true
             return base(output: try JSONSerialization.data(withJSONObject: object))
+        case .nonASCIISnapshotDigest:
+            let nonASCII = try JSONEncoder().encode(
+                StaticWorkerResponse(
+                    report: passingReport,
+                    profileSHA256: String(repeating: "١", count: 64),
+                    policySHA256: String(repeating: "b", count: 64)
+                )
+            )
+            return base(output: nonASCII)
         }
     }
 

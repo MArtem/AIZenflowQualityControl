@@ -335,6 +335,22 @@ package struct StaticWorkerResponse: Codable, Sendable {
         policySHA256 = try container.decodeIfPresent(String.self, forKey: .policySHA256)
     }
 
+    package func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(report, forKey: .report)
+        if let profileSHA256 {
+            try container.encode(profileSHA256, forKey: .profileSHA256)
+        } else {
+            try container.encodeNil(forKey: .profileSHA256)
+        }
+        if let policySHA256 {
+            try container.encode(policySHA256, forKey: .policySHA256)
+        } else {
+            try container.encodeNil(forKey: .policySHA256)
+        }
+    }
+
     fileprivate var hasValidDigests: Bool {
         if report.status == .pass,
            (profileSHA256 == nil || policySHA256 == nil) {
@@ -344,9 +360,14 @@ package struct StaticWorkerResponse: Codable, Sendable {
             guard let digest else {
                 return true
             }
-            return digest.count == 64 && digest.allSatisfy {
-                $0.isNumber || ($0 >= "a" && $0 <= "f")
-            }
+            return isLowercaseSHA256(digest)
+        }
+    }
+
+    private func isLowercaseSHA256(_ digest: String) -> Bool {
+        let bytes = digest.utf8
+        return bytes.count == 64 && bytes.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
     }
 }

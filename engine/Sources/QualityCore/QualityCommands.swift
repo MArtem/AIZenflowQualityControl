@@ -533,14 +533,14 @@ public enum QualityCommands {
         policyURL: URL,
         repositoryRoot: URL
     ) -> StaticWorkerResponse {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
         let profileDocument = loadStaticScanDocument(from: profileURL)
         let policyDocument = loadStaticScanDocument(from: policyURL)
         let documents = StaticScanDocuments(
             profile: profileDocument.document,
             policy: policyDocument.document
         )
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
         let report = staticScan(
             profileURL: profileURL,
             policyURL: policyURL,
