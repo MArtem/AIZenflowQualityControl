@@ -19,7 +19,7 @@ Test creation, modification, and execution remain separately user-controlled. Te
 inputs and SwiftPM scratch output must stay under `.quality-control-cache/` inside the repository.
 
 After explicit local-execution permission, run the following from the repository root. The latest
-Stage 9C1 full run passed 99 tests in eight suites. The earlier Stage 7/9A corrective contained run
+Stage 9D1 full run passed 112 tests in ten suites. The earlier Stage 7/9A corrective contained run
 passed 58 tests in four suites with warnings treated as errors. The combined matrix includes
 regressions for digest-only command identity without raw argv, complete
 permission-action sets, trusted terminal outcomes, status-dependent gate command IDs,

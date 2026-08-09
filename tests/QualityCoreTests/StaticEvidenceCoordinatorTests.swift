@@ -69,6 +69,22 @@ struct StaticEvidenceCoordinatorTests {
         }
     }
 
+    @Test("A worker policy digest must bind the exact parent-observed policy snapshot")
+    func policyDigestMismatchFailsClosed() throws {
+        let snapshot = try validProfileSnapshot()
+
+        #expect(throws: StaticEvidenceCoordinationError.self) {
+            try StaticEvidenceCoordinator.coordinate(
+                observation: try observation(
+                    status: .pass,
+                    profileSHA256: snapshot.sha256,
+                    policySHA256: String(repeating: "d", count: 64)
+                ),
+                context: context(profileSnapshot: snapshot)
+            )
+        }
+    }
+
     @Test(
         "Missing worker snapshot bindings never produce evidence",
         arguments: MissingDigestCase.allCases
@@ -196,7 +212,8 @@ struct StaticEvidenceCoordinatorTests {
                 profileSnapshot: snapshot,
                 sourceRepository: sourceRepository,
                 sourceRevision: sourceRevision,
-                engineRevision: engineRevision
+                engineRevision: engineRevision,
+                policySHA256: policySHA256
             )
         )
     }
@@ -238,6 +255,7 @@ struct StaticEvidenceCoordinatorTests {
         sourceRepository: String = "MArtem/example",
         sourceRevision: String = sourceRevision,
         engineRevision: String = engineRevision,
+        policySHA256: String = policySHA256,
         toolchain: EvidenceToolchain = toolchain
     ) -> StaticEvidenceObservedContext {
         StaticEvidenceObservedContext(
@@ -245,7 +263,8 @@ struct StaticEvidenceCoordinatorTests {
             sourceRevision: sourceRevision,
             engineRevision: engineRevision,
             toolchain: toolchain,
-            profileSnapshot: profileSnapshot
+            profileSnapshot: profileSnapshot,
+            policySHA256: policySHA256
         )
     }
 
@@ -333,7 +352,8 @@ enum InvalidContextCase: CaseIterable, Sendable {
                 sourceRevision: sourceRevision,
                 engineRevision: engineRevision,
                 toolchain: toolchain,
-                profileSnapshot: profileSnapshot
+                profileSnapshot: profileSnapshot,
+                policySHA256: policySHA256
             )
         case .malformedSourceRevision:
             return StaticEvidenceObservedContext(
@@ -341,7 +361,8 @@ enum InvalidContextCase: CaseIterable, Sendable {
                 sourceRevision: "not-a-revision",
                 engineRevision: engineRevision,
                 toolchain: toolchain,
-                profileSnapshot: profileSnapshot
+                profileSnapshot: profileSnapshot,
+                policySHA256: policySHA256
             )
         case .oversizedToolchain:
             return StaticEvidenceObservedContext(
@@ -352,7 +373,8 @@ enum InvalidContextCase: CaseIterable, Sendable {
                     swiftVersion: String(repeating: "x", count: 1_025),
                     xcodeVersion: "Xcode 16"
                 ),
-                profileSnapshot: profileSnapshot
+                profileSnapshot: profileSnapshot,
+                policySHA256: policySHA256
             )
         }
     }

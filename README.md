@@ -25,9 +25,8 @@ application integration. Stage 9A includes bounded artifact-hashing primitives b
 worker boundary, but production artifact evidence remains blocked until a dedicated OS-backed
 immutable-snapshot provider exists; a read-only mount flag alone is not sufficient proof. The
 engine does not create or mount privileged snapshots. Its in-memory evidence producer and
-package-internal static coordinator require coordinator-owned observations; neither adds a public
-execution-boundary or workflow evidence producer, cryptographic attestation, or authoritative
-release proof.
+package-internal static coordinator require coordinator-owned observations; neither adds a general
+workflow evidence producer, cryptographic attestation, or authoritative release proof.
 Stage 9C1 adds only `validate-evidence-expectation`: it validates the bounded closed document
 envelope and explicitly does not turn a caller-supplied file into trusted evidence or a verdict.
 The public `quality static` command now isolates the cooperative scanner in a child process, applies
@@ -37,6 +36,10 @@ and validates report/exit consistency before forwarding a result. The internal c
 only that validated response plus separately observed identity/profile facts into in-memory static
 evidence; it accepts no expectation or evidence JSON. Buildable Xcode fixtures remain separate work
 and are not claimed by this boundary.
+`quality static-evidence` is the narrow public execution boundary for that scanner: it verifies
+exact clean Git source/engine checkouts, parent-read profile/policy snapshots, selected toolchain,
+worker digest binding, and unchanged checkouts before emitting verifier-checked evidence. It remains
+advisory static evidence only; it does not run builds, tests, UI/device checks, reviews, or attest.
 
 ## Authority Boundary
 
@@ -83,6 +86,7 @@ swift run quality validate-profile --profile <profile.json>
 swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
+swift run quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex>
 ```
 
 - `validate-profile` decodes schema version 1 and rejects missing, absolute, duplicate, or
@@ -93,6 +97,8 @@ swift run quality static --profile <profile.json> --policy <policy.json> --repos
   running Xcode, builds, or tests.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
   checks from explicit profile and policy inputs.
+- `static-evidence` emits a versioned result envelope. `PASS` includes evidence and an empty-issue
+  verifier result; preflight, snapshot, process, or checkout failures are evidence-free `BLOCKED`.
 
 Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
 unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.

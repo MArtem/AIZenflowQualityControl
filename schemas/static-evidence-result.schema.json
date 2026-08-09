@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/static-evidence-result.schema.json",
+  "title": "AIZenflow Static Evidence Execution Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "command", "status", "report", "evidence", "verification"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "command": { "const": "static-evidence" },
+    "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
+    "report": { "$ref": "#/$defs/report" },
+    "evidence": { "oneOf": [{ "type": "null" }, { "$ref": "quality-evidence.schema.json" }] },
+    "verification": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "PASS" } } },
+      "then": {
+        "properties": {
+          "report": { "properties": { "status": { "const": "PASS" } } },
+          "evidence": { "$ref": "quality-evidence.schema.json" },
+          "verification": { "$ref": "#/$defs/verification" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "evidence": { "type": "null" } } },
+      "then": { "properties": { "verification": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "command", "status", "checks"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "command": { "const": "static" },
+        "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "message"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
+              "message": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "path": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            }
+          }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "issues"],
+      "properties": {
+        "verdict": { "enum": ["READY", "READY_WITH_ACCEPTED_RISK", "NEEDS_OWNER_DECISION", "NOT_READY", "BLOCKED", "BYPASSED"] },
+        "issues": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "message": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

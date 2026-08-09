@@ -37,3 +37,9 @@ remains encode-only. Evidence documents are capped at 8 MiB, top-level collectio
 and bounded strings at 1,024 Unicode scalars. Runtime and schema share an explicit stable whitespace
 set, including U+200B, and the schema's conservative worst-case escaped-string budget remains below
 the loader cap. Residual-risk entries are unique in both layers.
+
+`static-evidence-result.schema.json` defines the versioned closed public envelope for
+`quality static-evidence`. It contains the normalized static report and includes evidence plus
+verification together only after the execution boundary's coordinator/verifier path succeeds. A
+`PASS` result therefore requires both values; evidence-free boundary failures remain `BLOCKED` and
+do not imply that a build, tests, UI/device check, review, or attestation happened.
