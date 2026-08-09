@@ -87,7 +87,7 @@ struct VerifierContractTests {
     @Test("A structurally valid expectation document remains untrusted")
     func expectationDocumentValidationDoesNotProduceEvidence() throws {
         let fixture = try TemporaryProfile(data: Data(validExpectationJSON.utf8))
-        defer { try? fixture.remove() }
+        defer { #expect(throws: Never.self) { try fixture.remove() } }
 
         let report = QualityCommands.validateEvidenceExpectation(at: fixture.url)
 
@@ -97,7 +97,7 @@ struct VerifierContractTests {
     }
 }
 
-private let validExpectationJSON = #"{"schemaVersion":1,"sourceRepository":"MArtem/example","sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","engineVersion":"1.0.0","engineRevision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[],"gates":[],"residualRisks":[]}"#
+private let validExpectationJSON = #"{"schemaVersion":1,"sourceRepository":"MArtem/example","sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","engineVersion":"1.0.0","engineRevision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[{"id":"static","commandSHA256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","exitCode":0,"actions":[],"authorization":"NOT_REQUIRED"}],"gates":[{"id":"QC.STATIC","status":"PASS","message":"Static passed.","commandID":"static","actions":[]}],"residualRisks":[]}"#
 
 enum InvalidProfileInput: String, CaseIterable, Sendable {
     case malformed
