@@ -83,6 +83,25 @@ private func emitArtifactHashWorkerResponse(
     exit(exitCode)
 }
 
+private func emitStaticWorkerResponse(_ response: StaticWorkerResponse) -> Never {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    guard var data = try? encoder.encode(response) else {
+        exit(2)
+    }
+    data.append(0x0A)
+    FileHandle.standardOutput.write(data)
+
+    switch response.report.status {
+    case .pass:
+        exit(0)
+    case .fail:
+        exit(1)
+    case .blocked:
+        exit(2)
+    }
+}
+
 private func parseArtifactWorkerOptions(
     _ arguments: ArraySlice<String>
 ) throws -> (snapshotRoot: String, artifacts: [String]) {
@@ -278,13 +297,13 @@ do {
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
         let repositoryRoot = try required("--repository-root", in: options)
-        let report = QualityCommands.staticScan(
+        let response = QualityCommands.staticWorkerResponse(
             profileURL: fileURL(profile),
             policyURL: fileURL(policy),
             repositoryRoot: fileURL(repositoryRoot)
         )
         withExtendedLifetime(parentExitMonitor) {
-            emit(report)
+            emitStaticWorkerResponse(response)
         }
 
     case "__artifact-hash-worker":
