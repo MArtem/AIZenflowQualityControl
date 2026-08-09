@@ -20,6 +20,10 @@ the claimed advisory verdict. Raw command arguments are excluded from the eviden
 verification additionally requires trusted out-of-band expectations for the complete
 command/action sets, terminal command outcomes, exact gate-to-command bindings, trusted status and
 message for every gate, user-authorized actions, test-count gate, and artifact hashes.
+
+`evidence-expectation.schema.json` has the same closed transport envelope as the untrusted
+production context. `quality validate-evidence-expectation` checks only that envelope; validation
+does not grant trust, construct an `EvidenceExpectation`, or produce an advisory verdict.
 The schema requires `commandID` for `PASS`/`FAIL` and forbids it for explicit non-executed states.
 Actionless commands require `NOT_REQUIRED`; commands with controlled actions require `PROFILE` or
 `USER`. An empty command set is valid only when runtime gate accounting finds no command reference,

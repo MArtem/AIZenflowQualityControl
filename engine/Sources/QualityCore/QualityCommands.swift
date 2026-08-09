@@ -311,6 +311,33 @@ private enum ProfileLoadResult {
 }
 
 public enum QualityCommands {
+    public static func validateEvidenceExpectation(at expectationURL: URL) -> QualityReport {
+        do {
+            _ = try EvidenceExpectationDocumentLoader.load(from: expectationURL)
+            return QualityReport(
+                command: "validate-evidence-expectation",
+                checks: [
+                    QualityCheck(
+                        id: "QC.EVIDENCE_EXPECTATION.STRUCTURE",
+                        status: .pass,
+                        message: "Evidence expectation document is structurally valid but remains untrusted."
+                    )
+                ]
+            )
+        } catch {
+            return QualityReport(
+                command: "validate-evidence-expectation",
+                checks: [
+                    QualityCheck(
+                        id: "QC.EVIDENCE_EXPECTATION.UNREADABLE",
+                        status: .fail,
+                        message: "Evidence expectation document is malformed, unsupported, or unreadable."
+                    )
+                ]
+            )
+        }
+    }
+
     public static func validateProfile(at profileURL: URL) -> QualityReport {
         switch loadProfile(at: profileURL) {
         case let .failure(check):

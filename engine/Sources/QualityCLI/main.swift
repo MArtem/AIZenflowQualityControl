@@ -204,7 +204,7 @@ guard arguments.count >= 2 else {
     emit(
         QualityCommands.blockedUsage(
             command: "usage",
-            message: "Expected doctor, validate-profile, or static."
+            message: "Expected doctor, validate-profile, validate-evidence-expectation, or static."
         )
     )
 }
@@ -217,6 +217,11 @@ do {
         let options = try parseOptions(arguments.dropFirst(2), allowed: ["--profile"])
         let profile = try required("--profile", in: options)
         emit(QualityCommands.validateProfile(at: fileURL(profile)))
+
+    case "validate-evidence-expectation":
+        let options = try parseOptions(arguments.dropFirst(2), allowed: ["--expectation"])
+        let expectation = try required("--expectation", in: options)
+        emit(QualityCommands.validateEvidenceExpectation(at: fileURL(expectation)))
 
     case "doctor":
         let options = try parseOptions(
@@ -326,7 +331,7 @@ do {
         emit(
             QualityCommands.blockedUsage(
                 command: command,
-                message: "Unknown command. Expected doctor, validate-profile, or static."
+                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, or static."
             )
         )
     }
