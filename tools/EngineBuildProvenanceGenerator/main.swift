@@ -4,19 +4,18 @@ import Foundation
 struct EngineBuildProvenanceGenerator {
     static func main() throws {
         let values = CommandLine.arguments
-        guard values.count == 5, values[1] == "--package-root", values[3] == "--output" else {
+        guard values.count >= 5, values[1] == "--package-root", values[3] == "--output" else {
             throw GeneratorError.invalidArguments
         }
         let root = URL(fileURLWithPath: values[2], isDirectory: true).standardizedFileURL
         let output = URL(fileURLWithPath: values[4])
+        let inputPaths = (try? parseInputs(values.dropFirst(5), root: root)) ?? []
         let revision = git(["rev-parse", "HEAD"], root: root) ?? ""
         let rootMatches = git(["rev-parse", "--show-toplevel"], root: root)
             .map { URL(fileURLWithPath: $0).standardizedFileURL == root } ?? false
-        let clean = git(["status", "--porcelain=v1", "--untracked-files=all"], root: root) == ""
-        let indexFlags = git(["ls-files", "-v"], root: root) ?? ""
-        let trusted = rootMatches && clean && revision.count == 40 && indexFlags
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .allSatisfy { $0.first == "H" }
+        let trusted = !inputPaths.isEmpty && rootMatches && revision.count == 40 && inputPaths.allSatisfy {
+            matchesHeadBlob(at: $0, revision: revision, root: root)
+        }
         let source = """
         enum EngineBuildProvenance {
             static let revision = \(swiftString(revision))
@@ -33,7 +32,7 @@ struct EngineBuildProvenanceGenerator {
         process.arguments = ["-C", root.path] + arguments
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
             process.waitUntilExit()
@@ -45,6 +44,28 @@ struct EngineBuildProvenanceGenerator {
         } catch {
             return nil
         }
+    }
+
+    private static func parseInputs(_ values: ArraySlice<String>, root: URL) throws -> [String] {
+        guard values.count.isMultiple(of: 2) else { throw GeneratorError.invalidArguments }
+        var paths: [String] = []
+        var index = values.startIndex
+        while index < values.endIndex {
+            guard values[index] == "--input" else { throw GeneratorError.invalidArguments }
+            let url = URL(fileURLWithPath: values[values.index(after: index)]).standardizedFileURL
+            guard url.path.hasPrefix(root.path + "/") else { throw GeneratorError.invalidArguments }
+            paths.append(String(url.path.dropFirst(root.path.count + 1)))
+            index = values.index(index, offsetBy: 2)
+        }
+        return paths.sorted()
+    }
+
+    private static func matchesHeadBlob(at relativePath: String, revision: String, root: URL) -> Bool {
+        guard let working = git(["hash-object", "--", relativePath], root: root),
+              let expected = git(["rev-parse", "\(revision):\(relativePath)"], root: root) else {
+            return false
+        }
+        return working == expected
     }
 
     private static func swiftString(_ value: String) -> String {

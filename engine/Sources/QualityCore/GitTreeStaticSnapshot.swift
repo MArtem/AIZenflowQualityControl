@@ -1,4 +1,3 @@
-import Darwin
 import CryptoKit
 import Foundation
 
@@ -32,13 +31,17 @@ package struct GitTreeStaticSnapshot: Sendable {
         }
 
         var paths = Set<String>()
+        var filesystemEquivalentPaths = Set<String>()
         var parsed: [Entry] = []
         parsed.reserveCapacity(records.count)
         for record in records {
             let sections = record.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
             guard sections.count == 2,
                   let path = Self.validatePath(String(sections[1])),
-                  paths.insert(path).inserted else {
+                  paths.insert(path).inserted,
+                  filesystemEquivalentPaths.insert(
+                    path.precomposedStringWithCanonicalMapping.lowercased()
+                  ).inserted else {
                 throw GitTreeStaticSnapshotError.invalidManifest
             }
             let fields = sections[0].split(whereSeparator: \.isWhitespace)
@@ -54,43 +57,49 @@ package struct GitTreeStaticSnapshot: Sendable {
         sha256 = SHA256.hash(data: manifest).map { String(format: "%02x", $0) }.joined()
     }
 
-    package func materialize(in parent: URL, sourcePaths: [String]) throws -> URL {
+    package func staticChecks(
+        sourcePaths: [String],
+        maximumFileBytes: Int,
+        excludedDirectoryNames: Set<String>,
+        forbiddenFileSuffixes: [String]
+    ) -> [QualityCheck] {
         guard !sourcePaths.isEmpty,
               sourcePaths.allSatisfy({ Self.validatePath($0) != nil }) else {
-            throw GitTreeStaticSnapshotError.invalidManifest
+            return [QualityCheck(id: "QC.STATIC.SOURCE_PATH", status: .blocked, message: "Configured source paths are invalid.")]
         }
-        var isDirectory = ObjCBool(false)
-        guard FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else {
-            throw GitTreeStaticSnapshotError.materializationFailed
-        }
-
-        let root = parent.appendingPathComponent("git-tree-" + UUID().uuidString, isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
-            for sourcePath in sourcePaths {
-                try createDirectory(relativePath: sourcePath, under: root)
+        let forbidden = forbiddenFileSuffixes.map { $0.lowercased() }
+        var checks: [QualityCheck] = []
+        var regularFiles = 0
+        for sourcePath in sourcePaths.sorted() {
+            let prefix = sourcePath == "." ? "" : sourcePath + "/"
+            let scoped = entries.filter { prefix.isEmpty || $0.path.hasPrefix(prefix) }
+            guard !scoped.isEmpty else {
+                checks.append(QualityCheck(id: "QC.STATIC.SOURCE_PATH", status: .blocked, message: "Configured source path has no Git-tree entries.", path: sourcePath))
+                continue
             }
-            for entry in entries where sourcePaths.contains(where: {
-                $0 == "." || entry.path == $0 || entry.path.hasPrefix($0 + "/")
-            }) {
-                try materialize(entry, under: root)
+            for entry in scoped {
+                let components = entry.path.split(separator: "/").map(String.init)
+                guard !components.dropLast().contains(where: { excludedDirectoryNames.contains($0) }) else { continue }
+                let name = components.last ?? entry.path
+                if forbidden.contains(where: { name.lowercased().hasSuffix($0) }) {
+                    checks.append(QualityCheck(id: "QC.STATIC.FORBIDDEN_ARTIFACT", status: .fail, message: "Generated or release artifact is forbidden in source scope.", path: entry.path))
+                }
+                switch entry.kind {
+                case .symlink:
+                    checks.append(QualityCheck(id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW", status: .blocked, message: "Symbolic links require explicit boundary review.", path: entry.path))
+                case .file:
+                    regularFiles += 1
+                    if entry.size > Int64(maximumFileBytes) {
+                        checks.append(QualityCheck(id: "QC.STATIC.OVERSIZED_FILE", status: .fail, message: "File exceeds the configured maximum byte size.", path: entry.path))
+                    }
+                }
             }
-            return root
-        } catch {
-            try? Self.makeWritable(root)
-            try? FileManager.default.removeItem(at: root)
-            throw GitTreeStaticSnapshotError.materializationFailed
         }
-    }
-
-    package static func removeMaterialization(at root: URL) throws {
-        try makeWritable(root)
-        try FileManager.default.removeItem(at: root)
-    }
-
-    package static func sealMaterialization(at root: URL) throws {
-        try seal(root)
+        if checks.contains(where: { $0.status != .pass }) { return checks }
+        if regularFiles == 0 {
+            return [QualityCheck(id: "QC.STATIC.NO_FILES_SCANNED", status: .blocked, message: "Static scan inspected zero regular files.")]
+        }
+        return [QualityCheck(id: "QC.STATIC.SCAN", status: .pass, message: "Static scan completed for \(regularFiles) regular files.")]
     }
 
     private struct Entry: Sendable {
@@ -138,56 +147,4 @@ package struct GitTreeStaticSnapshot: Sendable {
         }
     }
 
-    private func materialize(_ entry: Entry, under root: URL) throws {
-        let url = root.appendingPathComponent(entry.path)
-        let parent = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-        switch entry.kind {
-        case .file:
-            guard FileManager.default.createFile(atPath: url.path, contents: Data()) else {
-                throw GitTreeStaticSnapshotError.materializationFailed
-            }
-            let handle = try FileHandle(forWritingTo: url)
-            defer { try? handle.close() }
-            try handle.truncate(atOffset: UInt64(entry.size))
-        case .symlink:
-            try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: "git-tree-snapshot")
-        }
-    }
-
-    private func createDirectory(relativePath: String, under root: URL) throws {
-        try FileManager.default.createDirectory(
-            at: root.appendingPathComponent(relativePath, isDirectory: true),
-            withIntermediateDirectories: true
-        )
-    }
-
-    private static func seal(_ root: URL) throws {
-        let manager = FileManager.default
-        guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: []) else {
-            throw GitTreeStaticSnapshotError.materializationFailed
-        }
-        for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard values.isSymbolicLink != true else { continue }
-            guard chmod(url.path, values.isDirectory == true ? 0o500 : 0o400) == 0 else {
-                throw GitTreeStaticSnapshotError.materializationFailed
-            }
-        }
-        guard chmod(root.path, 0o500) == 0 else {
-            throw GitTreeStaticSnapshotError.materializationFailed
-        }
-    }
-
-    private static func makeWritable(_ root: URL) throws {
-        guard FileManager.default.fileExists(atPath: root.path) else { return }
-        _ = chmod(root.path, 0o700)
-        if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: []) {
-            for case let url as URL in enumerator {
-                let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                guard values.isSymbolicLink != true else { continue }
-                _ = chmod(url.path, values.isDirectory == true ? 0o700 : 0o600)
-            }
-        }
-    }
 }

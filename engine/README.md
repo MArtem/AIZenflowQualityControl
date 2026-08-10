@@ -13,7 +13,7 @@ engine does not create or mount privileged snapshots. The public in-memory `Evid
 package-internal static coordinator both fail closed. `quality static-evidence` is the narrow public
 boundary for one exact static execution: it binds engine build provenance, source/engine checkout
 identities and revisions, descriptor-pinned profile/policy bytes, observed toolchain output, and an
-authenticated worker scan of a private Git-tree materialization before coordinator/verifier can emit
+authenticated worker scan of a bounded exact Git-tree manifest before coordinator/verifier can emit
 evidence. It is not a general workflow producer and does not prove runtime or review outcomes; no
 cryptographic attestation exists. Future execution surfaces must consult the permission evaluator
 before acting and must not infer user authorization from untrusted evidence.

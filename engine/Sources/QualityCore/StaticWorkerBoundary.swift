@@ -283,7 +283,8 @@ package enum StaticWorkerBoundary {
         return ValidatedStaticWorkerObservation(
             report: normalizedReport,
             profileSHA256: response.profileSHA256,
-            policySHA256: response.policySHA256
+            policySHA256: response.policySHA256,
+            sourceManifestSHA256: response.sourceManifestSHA256
         )
     }
 
@@ -336,15 +337,18 @@ package struct ValidatedStaticWorkerObservation: Sendable {
     package let report: QualityReport
     package let profileSHA256: String?
     package let policySHA256: String?
+    package let sourceManifestSHA256: String?
 
     fileprivate init(
         report: QualityReport,
         profileSHA256: String?,
-        policySHA256: String?
+        policySHA256: String?,
+        sourceManifestSHA256: String?
     ) {
         self.report = report
         self.profileSHA256 = profileSHA256
         self.policySHA256 = policySHA256
+        self.sourceManifestSHA256 = sourceManifestSHA256
     }
 }
 
@@ -355,16 +359,19 @@ package struct StaticWorkerResponse: Codable, Sendable {
     package let report: QualityReport
     package let profileSHA256: String?
     package let policySHA256: String?
+    package let sourceManifestSHA256: String?
 
     package init(
         report: QualityReport,
         profileSHA256: String?,
-        policySHA256: String?
+        policySHA256: String?,
+        sourceManifestSHA256: String? = nil
     ) {
         schemaVersion = Self.currentSchemaVersion
         self.report = report
         self.profileSHA256 = profileSHA256
         self.policySHA256 = policySHA256
+        self.sourceManifestSHA256 = sourceManifestSHA256
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -372,6 +379,7 @@ package struct StaticWorkerResponse: Codable, Sendable {
         case report
         case profileSHA256
         case policySHA256
+        case sourceManifestSHA256
     }
 
     package init(from decoder: any Decoder) throws {
@@ -385,6 +393,7 @@ package struct StaticWorkerResponse: Codable, Sendable {
         report = try container.decode(QualityReport.self, forKey: .report)
         profileSHA256 = try container.decodeIfPresent(String.self, forKey: .profileSHA256)
         policySHA256 = try container.decodeIfPresent(String.self, forKey: .policySHA256)
+        sourceManifestSHA256 = try container.decodeIfPresent(String.self, forKey: .sourceManifestSHA256)
     }
 
     package func encode(to encoder: any Encoder) throws {
@@ -401,13 +410,20 @@ package struct StaticWorkerResponse: Codable, Sendable {
         } else {
             try container.encodeNil(forKey: .policySHA256)
         }
+        if let sourceManifestSHA256 {
+            try container.encode(sourceManifestSHA256, forKey: .sourceManifestSHA256)
+        } else {
+            try container.encodeNil(forKey: .sourceManifestSHA256)
+        }
     }
 
     fileprivate var hasValidDigests: Bool {
         let profileDigestIsValid = profileSHA256.map(isLowercaseSHA256) ?? false
         let policyDigestIsValid = policySHA256.map(isLowercaseSHA256) ?? false
+        let manifestDigestIsValid = sourceManifestSHA256.map(isLowercaseSHA256) ?? true
         guard (profileSHA256 == nil || profileDigestIsValid)
-            && (policySHA256 == nil || policyDigestIsValid) else {
+            && (policySHA256 == nil || policyDigestIsValid)
+            && manifestDigestIsValid else {
             return false
         }
         if profileDigestIsValid && policyDigestIsValid {

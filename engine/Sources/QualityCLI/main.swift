@@ -48,6 +48,20 @@ private func fileURL(_ path: String) -> URL {
     return URL(fileURLWithPath: path, relativeTo: currentDirectory).standardizedFileURL
 }
 
+private func boundedFileData(at url: URL, maximumBytes: Int) throws -> Data {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var data = Data()
+    while let chunk = try handle.read(upToCount: min(64 * 1_024, maximumBytes + 1 - data.count)),
+          !chunk.isEmpty {
+        guard data.count + chunk.count <= maximumBytes else {
+            throw CLIError.message("Internal worker input exceeded its immutable byte limit.")
+        }
+        data.append(chunk)
+    }
+    return data
+}
+
 private func emit(_ report: QualityReport) -> Never {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -206,6 +220,7 @@ private func runStaticWorkerExecution(
     profileURL: URL,
     policyURL: URL,
     repositoryRoot: URL,
+    manifestURL: URL? = nil,
     deadlineEpochSeconds: String? = nil
 ) -> StaticWorkerExecution {
     guard let executableURL = Bundle.main.executableURL else {
@@ -225,6 +240,9 @@ private func runStaticWorkerExecution(
         "--policy", policyURL.path,
         "--repository-root", repositoryRoot.path
     ]
+    if let manifestURL {
+        process.arguments! += ["--manifest", manifestURL.path]
+    }
     var environment = ProcessInfo.processInfo.environment
     environment[staticWorkerEnvironmentKey] = "1"
     if let deadlineEpochSeconds {
@@ -462,36 +480,38 @@ private func runStaticEvidence(
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.TOOLCHAIN_UNAVAILABLE", "The selected Swift or Xcode toolchain could not be observed within its bounded envelope.")
     }
 
-    let materialization: URL
-    let inputDirectory: URL
+    var inputDirectory: URL?
     do {
-        materialization = try sourceSnapshot.materialize(
-            in: snapshotRoot,
-            sourcePaths: snapshots.profileSnapshot.profile.sourcePaths
-        )
         inputDirectory = snapshotRoot.appendingPathComponent(
             "static-evidence-input-" + UUID().uuidString,
             isDirectory: true
         )
-        try FileManager.default.createDirectory(at: inputDirectory, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: inputDirectory!, withIntermediateDirectories: false)
         try snapshots.profileData.write(
-            to: inputDirectory.appendingPathComponent("profile.json"),
+            to: inputDirectory!.appendingPathComponent("profile.json"),
             options: .atomic
         )
         try snapshots.policyData.write(
-            to: inputDirectory.appendingPathComponent("policy.json"),
+            to: inputDirectory!.appendingPathComponent("policy.json"),
             options: .atomic
         )
-        try GitTreeStaticSnapshot.sealMaterialization(at: materialization)
+        try manifest.write(
+            to: inputDirectory!.appendingPathComponent("source-manifest.bin"),
+            options: .atomic
+        )
     } catch {
+        if let inputDirectory { try? FileManager.default.removeItem(at: inputDirectory) }
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be materialized as a private read-only scan view.")
     }
-    defer { try? GitTreeStaticSnapshot.removeMaterialization(at: materialization) }
+    guard let inputDirectory else {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be prepared for the worker.")
+    }
     defer { try? FileManager.default.removeItem(at: inputDirectory) }
     let worker = runStaticWorkerExecution(
         profileURL: inputDirectory.appendingPathComponent("profile.json"),
         policyURL: inputDirectory.appendingPathComponent("policy.json"),
-        repositoryRoot: materialization,
+        repositoryRoot: source.root,
+        manifestURL: inputDirectory.appendingPathComponent("source-manifest.bin"),
         deadlineEpochSeconds: deadlineEpochSeconds
     )
     guard let observation = worker.observation else {
@@ -499,10 +519,12 @@ private func runStaticEvidence(
         return StaticEvidenceExecutionResult(report: worker.report)
     }
     guard observation.profileSHA256 == snapshots.profileSnapshot.sha256,
-          observation.policySHA256 == snapshots.policySHA256 else {
+          observation.policySHA256 == snapshots.policySHA256,
+          observation.sourceManifestSHA256 == sourceSnapshot.sha256 else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SNAPSHOT_MISMATCH", "Worker snapshot digests did not match the parent-observed profile and policy bytes.")
     }
-    guard observedGitCheckout(at: engine.root) == engine else {
+    guard observedGitCheckout(at: source.root) == source,
+          observedGitCheckout(at: engine.root) == engine else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.CHECKOUT_CHANGED", "Source or engine checkout changed during static execution.")
     }
     do {
@@ -565,7 +587,7 @@ do {
     case "static":
         let options = try parseOptions(
             arguments.dropFirst(2),
-            allowed: ["--profile", "--policy", "--repository-root"]
+            allowed: ["--profile", "--policy", "--repository-root", "--manifest"]
         )
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
@@ -624,11 +646,20 @@ do {
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
         let repositoryRoot = try required("--repository-root", in: options)
-        let response = QualityCommands.staticWorkerResponse(
-            profileURL: fileURL(profile),
-            policyURL: fileURL(policy),
-            repositoryRoot: fileURL(repositoryRoot)
-        )
+        let response: StaticWorkerResponse
+        if let manifest = options["--manifest"] {
+            response = QualityCommands.staticEvidenceWorkerResponse(
+                profileData: try boundedFileData(at: fileURL(profile), maximumBytes: StaticEvidenceInputSnapshots.maximumInputBytes),
+                policyData: try boundedFileData(at: fileURL(policy), maximumBytes: StaticEvidenceInputSnapshots.maximumInputBytes),
+                manifestData: try boundedFileData(at: fileURL(manifest), maximumBytes: GitTreeStaticSnapshot.maximumManifestBytes)
+            )
+        } else {
+            response = QualityCommands.staticWorkerResponse(
+                profileURL: fileURL(profile),
+                policyURL: fileURL(policy),
+                repositoryRoot: fileURL(repositoryRoot)
+            )
+        }
         withExtendedLifetime(parentExitMonitor) {
             emitStaticWorkerResponse(response)
         }

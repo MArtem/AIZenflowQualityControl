@@ -17,7 +17,12 @@
     {
       "properties": {
         "status": { "const": "PASS" },
-        "report": { "properties": { "status": { "const": "PASS" } } },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "PASS" } } },
+            { "properties": { "checks": { "items": { "properties": { "status": { "const": "PASS" } } } } } }
+          ]
+        },
         "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "READY" } } }] },
         "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "READY" }, "issues": { "maxItems": 0 } } }] }
       }
@@ -25,7 +30,12 @@
     {
       "properties": {
         "status": { "const": "FAIL" },
-        "report": { "properties": { "status": { "const": "FAIL" } } },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "FAIL" } } },
+            { "properties": { "checks": { "contains": { "properties": { "status": { "const": "FAIL" } } }, "minContains": 1 } } }
+          ]
+        },
         "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "NOT_READY" } } }] },
         "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "NOT_READY" }, "issues": { "maxItems": 0 } } }] }
       }
@@ -33,7 +43,19 @@
     {
       "properties": {
         "status": { "const": "BLOCKED" },
-        "report": { "properties": { "status": { "const": "BLOCKED" } } },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "BLOCKED" } } },
+            {
+              "properties": {
+                "checks": {
+                  "not": { "contains": { "properties": { "status": { "const": "FAIL" } } } }
+                }
+              }
+            },
+            { "properties": { "checks": { "contains": { "properties": { "status": { "const": "BLOCKED" } } }, "minContains": 1 } } }
+          ]
+        },
         "evidence": { "type": "null" },
         "verification": { "type": "null" }
       }
@@ -41,7 +63,19 @@
     {
       "properties": {
         "status": { "const": "BLOCKED" },
-        "report": { "properties": { "status": { "const": "BLOCKED" } } },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "BLOCKED" } } },
+            {
+              "properties": {
+                "checks": {
+                  "not": { "contains": { "properties": { "status": { "const": "FAIL" } } } }
+                }
+              }
+            },
+            { "properties": { "checks": { "contains": { "properties": { "status": { "const": "BLOCKED" } } }, "minContains": 1 } } }
+          ]
+        },
         "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "BLOCKED" } } }] },
         "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "BLOCKED" }, "issues": { "maxItems": 0 } } }] }
       }

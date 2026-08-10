@@ -557,6 +557,45 @@ public enum QualityCommands {
         )
     }
 
+    package static func staticEvidenceWorkerResponse(
+        profileData: Data,
+        policyData: Data,
+        manifestData: Data
+    ) -> StaticWorkerResponse {
+        let profileDigest = SHA256.hash(data: profileData).map { String(format: "%02x", $0) }.joined()
+        let policyDigest = SHA256.hash(data: policyData).map { String(format: "%02x", $0) }.joined()
+        let manifestDigest = SHA256.hash(data: manifestData).map { String(format: "%02x", $0) }.joined()
+        do {
+            let profile = try ProfileLoader.decodeProfile(from: profileData)
+            let profileChecks = checks(for: ProfileValidator.validate(profile))
+            guard profileChecks.isEmpty else {
+                return StaticWorkerResponse(report: QualityReport(command: "static", checks: profileChecks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
+            }
+            let policy = try StaticPolicy.decode(from: policyData)
+            let policyChecks = policy.validationChecks()
+            guard !policyChecks.contains(where: { $0.status != .pass }) else {
+                return StaticWorkerResponse(report: QualityReport(command: "static", checks: policyChecks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
+            }
+            let snapshot = try GitTreeStaticSnapshot(manifest: manifestData)
+            let checks = [
+                QualityCheck(id: "QC.PROFILE.CONTRACT", status: .pass, message: "Project profile contract is valid.")
+            ] + policyChecks + snapshot.staticChecks(
+                sourcePaths: profile.sourcePaths,
+                maximumFileBytes: policy.maximumFileBytes,
+                excludedDirectoryNames: Set(policy.excludedDirectoryNames),
+                forbiddenFileSuffixes: policy.forbiddenFileSuffixes
+            )
+            return StaticWorkerResponse(report: QualityReport(command: "static", checks: checks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
+        } catch {
+            return StaticWorkerResponse(
+                report: QualityReport(command: "static", checks: [QualityCheck(id: "QC.STATIC.MANIFEST_UNREADABLE", status: .blocked, message: "Exact source Git-tree manifest could not be decoded.")]),
+                profileSHA256: profileDigest,
+                policySHA256: policyDigest,
+                sourceManifestSHA256: manifestDigest
+            )
+        }
+    }
+
     static func staticScan(
         profileURL: URL,
         policyURL: URL,

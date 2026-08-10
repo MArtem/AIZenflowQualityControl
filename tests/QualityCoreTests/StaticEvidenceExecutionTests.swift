@@ -35,8 +35,8 @@ struct StaticEvidenceExecutionTests {
         #expect(result.verification == nil)
     }
 
-    @Test("A Git tree manifest materializes scanner metadata without reading the mutable worktree")
-    func gitTreeManifestMaterializesSparseFilesAndSymlinks() throws {
+    @Test("A Git tree manifest reports metadata without projecting onto a filesystem")
+    func gitTreeManifestScansMetadataDirectly() throws {
         let snapshot = try GitTreeStaticSnapshot(
             manifest: Data(
                 """
@@ -45,23 +45,25 @@ struct StaticEvidenceExecutionTests {
                 """.utf8
             )
         )
-        let fixture = try TemporaryProfile(data: Data("{}".utf8))
-        defer { try? GitTreeStaticSnapshot.removeMaterialization(at: fixture.directory.appendingPathComponent("snapshot")) }
-        defer { try? fixture.remove() }
-        try fixture.createDirectory(at: "snapshot")
+        let checks = snapshot.staticChecks(
+            sourcePaths: ["Sources"],
+            maximumFileBytes: 16,
+            excludedDirectoryNames: [],
+            forbiddenFileSuffixes: [".xcresult"]
+        )
+        #expect(checks.map(\.id) == ["QC.STATIC.SYMLINK_REQUIRES_REVIEW"])
+    }
 
-        let root = try snapshot.materialize(
-            in: fixture.directory.appendingPathComponent("snapshot"),
-            sourcePaths: ["Sources"]
+    @Test("Filesystem-equivalent Git paths are rejected before scanning")
+    func gitTreeManifestRejectsCaseCollisions() {
+        let manifest = Data(
+            (
+                "100644 blob 0123456789012345678901234567890123456789 1\\tSources/Safe.swift\\0"
+                + "100644 blob 0123456789012345678901234567890123456789 9\\tSources/safe.swift\\0"
+            ).utf8
         )
-        defer { try? GitTreeStaticSnapshot.removeMaterialization(at: root) }
-        let file = root.appendingPathComponent("Sources/Safe.swift")
-        let values = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        #expect(values.isRegularFile == true)
-        #expect(values.fileSize == 12)
-        let linkTarget = try FileManager.default.destinationOfSymbolicLink(
-            atPath: root.appendingPathComponent("Sources/Link.swift").path
-        )
-        #expect(linkTarget == "git-tree-snapshot")
+        #expect(throws: GitTreeStaticSnapshotError.self) {
+            try GitTreeStaticSnapshot(manifest: manifest)
+        }
     }
 }
