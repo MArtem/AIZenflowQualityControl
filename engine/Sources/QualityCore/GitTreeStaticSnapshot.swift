@@ -79,11 +79,12 @@ package struct GitTreeStaticSnapshot: Sendable {
             }
             for entry in scoped {
                 let components = entry.path.split(separator: "/").map(String.init)
-                guard !components.dropLast().contains(where: { excludedDirectoryNames.contains($0) }) else { continue }
-                let name = components.last ?? entry.path
-                if forbidden.contains(where: { name.lowercased().hasSuffix($0) }) {
+                if components.contains(where: { component in
+                    forbidden.contains { component.lowercased().hasSuffix($0) }
+                }) {
                     checks.append(QualityCheck(id: "QC.STATIC.FORBIDDEN_ARTIFACT", status: .fail, message: "Generated or release artifact is forbidden in source scope.", path: entry.path))
                 }
+                guard !components.dropLast().contains(where: { excludedDirectoryNames.contains($0) }) else { continue }
                 switch entry.kind {
                 case .symlink:
                     checks.append(QualityCheck(id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW", status: .blocked, message: "Symbolic links require explicit boundary review.", path: entry.path))

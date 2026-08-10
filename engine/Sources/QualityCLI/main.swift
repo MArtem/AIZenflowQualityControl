@@ -324,6 +324,7 @@ private func boundedToolData(
         environment.removeValue(forKey: key)
     }
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     process.environment = environment
 
     guard let result = try? BoundedProcessRunner.run(
@@ -641,7 +642,7 @@ do {
         }
         let options = try parseOptions(
             arguments.dropFirst(2),
-            allowed: ["--profile", "--policy", "--repository-root"]
+            allowed: ["--profile", "--policy", "--repository-root", "--manifest"]
         )
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)

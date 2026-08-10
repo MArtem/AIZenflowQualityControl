@@ -58,12 +58,26 @@ struct StaticEvidenceExecutionTests {
     func gitTreeManifestRejectsCaseCollisions() {
         let manifest = Data(
             (
-                "100644 blob 0123456789012345678901234567890123456789 1\\tSources/Safe.swift\\0"
-                + "100644 blob 0123456789012345678901234567890123456789 9\\tSources/safe.swift\\0"
+                "100644 blob 0123456789012345678901234567890123456789 1\tSources/Safe.swift\0"
+                + "100644 blob 0123456789012345678901234567890123456789 9\tSources/safe.swift\0"
             ).utf8
         )
         #expect(throws: GitTreeStaticSnapshotError.self) {
             try GitTreeStaticSnapshot(manifest: manifest)
         }
+    }
+
+    @Test("Forbidden artifact directory components fail manifest scanning")
+    func gitTreeManifestRejectsForbiddenDirectory() throws {
+        let snapshot = try GitTreeStaticSnapshot(
+            manifest: Data("100644 blob 0123456789012345678901234567890123456789 1\tSources/App.xcarchive/Info.plist\0".utf8)
+        )
+        let checks = snapshot.staticChecks(
+            sourcePaths: ["Sources"],
+            maximumFileBytes: 16,
+            excludedDirectoryNames: [],
+            forbiddenFileSuffixes: [".xcarchive"]
+        )
+        #expect(checks.map(\.id) == ["QC.STATIC.FORBIDDEN_ARTIFACT"])
     }
 }
