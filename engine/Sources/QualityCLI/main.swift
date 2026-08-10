@@ -221,6 +221,7 @@ private func runStaticWorkerExecution(
     policyURL: URL,
     repositoryRoot: URL,
     manifestURL: URL? = nil,
+    expectedWorkerCodeDirectoryHash: String? = nil,
     deadlineEpochSeconds: String? = nil
 ) -> StaticWorkerExecution {
     guard let executableURL = Bundle.main.executableURL else {
@@ -263,12 +264,27 @@ private func runStaticWorkerExecution(
         let result = try BoundedProcessRunner.run(
             process,
             timeoutSeconds: timeoutSeconds,
-            maximumOutputBytes: StaticWorkerBoundary.maximumOutputBytes
+            maximumOutputBytes: StaticWorkerBoundary.maximumOutputBytes,
+            validateLaunchedProcess: { processIdentifier in
+                guard let expectedWorkerCodeDirectoryHash else {
+                    return true
+                }
+                return ProcessCodeIdentity.codeDirectoryHash(
+                    forProcessIdentifier: processIdentifier
+                ) == expectedWorkerCodeDirectoryHash
+            }
         )
         let observation = StaticWorkerBoundary.validatedObservation(for: result)
         return StaticWorkerExecution(
             report: observation?.report ?? StaticWorkerBoundary.report(for: result),
             observation: observation
+        )
+    } catch BoundedProcessRunnerError.identityRejected {
+        return StaticWorkerExecution(
+            report: QualityReport(command: "static", checks: [
+                QualityCheck(id: "QC.STATIC.WORKER_IDENTITY", status: .blocked, message: "Static worker code identity did not match the authenticated parent executable.")
+            ]),
+            observation: nil
         )
     } catch {
         return StaticWorkerExecution(
@@ -319,11 +335,14 @@ private func boundedToolData(
     var environment = ProcessInfo.processInfo.environment
     for key in [
         "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL"
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM", "GIT_CONFIG_PARAMETERS", "GIT_ATTR_NOSYSTEM"
     ] {
         environment.removeValue(forKey: key)
     }
     environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
     environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     process.environment = environment
 
@@ -362,10 +381,7 @@ private func observedGitCheckout(at requestedRoot: URL) -> GitCheckoutObservatio
             arguments: ["-C", root.path, "rev-parse", "HEAD"]
           ),
           isLowercaseHex(revision, count: 40),
-          let origin = boundedToolOutput(
-            executable: "/usr/bin/git",
-            arguments: ["-C", root.path, "remote", "get-url", "origin"]
-          ),
+          let origin = rawOriginURL(at: root),
           boundedToolOutput(
             executable: "/usr/bin/git",
             arguments: ["-C", root.path, "status", "--porcelain=v1", "--untracked-files=all"]
@@ -373,6 +389,22 @@ private func observedGitCheckout(at requestedRoot: URL) -> GitCheckoutObservatio
         return nil
     }
     return GitCheckoutObservation(root: root, revision: revision, origin: origin)
+}
+
+private func rawOriginURL(at root: URL) -> String? {
+    guard let data = boundedToolData(
+        executable: "/usr/bin/git",
+        arguments: ["-C", root.path, "config", "--local", "--no-includes", "--get-all", "remote.origin.url"]
+    ), let output = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    let values = output.split(separator: "\n", omittingEmptySubsequences: false)
+    guard values.count == 2,
+          !values[0].isEmpty,
+          !values[0].contains(where: { $0.isWhitespace }) else {
+        return nil
+    }
+    return String(values[0])
 }
 
 private func githubRepositoryIdentity(from remote: String) -> String? {
@@ -421,15 +453,16 @@ private func runStaticEvidence(
     snapshotRoot: URL,
     expectedSourceRepository: String,
     expectedSourceRevision: String,
-    expectedEngineRevision: String
+    expectedEngineRevision: String,
+    expectedEngineCodeDirectoryHash: String
 ) -> StaticEvidenceExecutionResult {
     guard isLowercaseHex(expectedSourceRevision, count: 40),
-          isLowercaseHex(expectedEngineRevision, count: 40) else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_EXPECTED_REVISION", "Expected revisions must be lowercase 40-byte Git object IDs.")
+          isLowercaseHex(expectedEngineRevision, count: 40),
+          isLowercaseHex(expectedEngineCodeDirectoryHash, count: 40) else {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_EXPECTED_IDENTITY", "Expected revisions and engine CodeDirectory hash must be lowercase 40-byte hexadecimal values.")
     }
-    guard EngineBuildProvenance.isTrusted,
-          EngineBuildProvenance.revision == expectedEngineRevision else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.EXECUTABLE_UNTRUSTED", "The running executable was not built from the asserted clean engine revision.")
+    guard ProcessCodeIdentity.currentCodeDirectoryHash() == expectedEngineCodeDirectoryHash else {
+        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.EXECUTABLE_UNTRUSTED", "The running executable code identity did not match the caller-trusted engine CodeDirectory hash.")
     }
     let deadlineEpochSeconds = String(Date().timeIntervalSince1970 + StaticWorkerBoundary.hardTimeoutSeconds)
     guard let source = observedGitCheckout(at: sourceRoot),
@@ -513,6 +546,7 @@ private func runStaticEvidence(
         policyURL: inputDirectory.appendingPathComponent("policy.json"),
         repositoryRoot: source.root,
         manifestURL: inputDirectory.appendingPathComponent("source-manifest.bin"),
+        expectedWorkerCodeDirectoryHash: expectedEngineCodeDirectoryHash,
         deadlineEpochSeconds: deadlineEpochSeconds
     )
     guard let observation = worker.observation else {
@@ -536,6 +570,7 @@ private func runStaticEvidence(
                     sourceRepository: expectedSourceRepository,
                     sourceRevision: source.revision,
                     engineRevision: engine.revision,
+                    engineCodeDirectoryHash: expectedEngineCodeDirectoryHash,
                     toolchain: EvidenceToolchain(swiftVersion: swiftVersion, xcodeVersion: xcodeVersion),
                     profileSnapshot: snapshots.profileSnapshot,
                     policySHA256: snapshots.policySHA256
@@ -607,7 +642,7 @@ do {
                 arguments.dropFirst(2),
                 allowed: [
                     "--profile", "--policy", "--repository-root", "--engine-repository-root",
-                    "--snapshot-root", "--source-repository", "--expected-source-revision", "--expected-engine-revision"
+                    "--snapshot-root", "--source-repository", "--expected-source-revision", "--expected-engine-revision", "--expected-engine-cdhash"
                 ]
             )
             emitStaticEvidence(
@@ -619,7 +654,8 @@ do {
                     snapshotRoot: fileURL(try required("--snapshot-root", in: options)),
                     expectedSourceRepository: try required("--source-repository", in: options),
                     expectedSourceRevision: try required("--expected-source-revision", in: options),
-                    expectedEngineRevision: try required("--expected-engine-revision", in: options)
+                    expectedEngineRevision: try required("--expected-engine-revision", in: options),
+                    expectedEngineCodeDirectoryHash: try required("--expected-engine-cdhash", in: options)
                 )
             )
         } catch {

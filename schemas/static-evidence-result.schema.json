@@ -23,7 +23,37 @@
             { "properties": { "checks": { "items": { "properties": { "status": { "const": "PASS" } } } } } }
           ]
         },
-        "evidence": { "allOf": [{ "$ref": "quality-evidence.schema.json" }, { "properties": { "claimedVerdict": { "const": "READY" } } }] },
+        "evidence": {
+          "allOf": [
+            { "$ref": "quality-evidence.schema.json" },
+            {
+              "properties": {
+                "claimedVerdict": { "const": "READY" },
+                "commands": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "properties": {
+                      "id": { "const": "static" },
+                      "exitCode": { "const": 0 }
+                    }
+                  }
+                },
+                "gates": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "properties": {
+                      "id": { "const": "QC.STATIC" },
+                      "status": { "const": "PASS" },
+                      "commandID": { "const": "static" }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
         "verification": { "allOf": [{ "$ref": "#/$defs/verification" }, { "properties": { "verdict": { "const": "READY" }, "issues": { "maxItems": 0 } } }] }
       }
     },

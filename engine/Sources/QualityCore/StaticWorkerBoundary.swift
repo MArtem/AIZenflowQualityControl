@@ -93,7 +93,8 @@ package enum BoundedProcessRunner {
     package static func run(
         _ process: Process,
         timeoutSeconds: TimeInterval,
-        maximumOutputBytes: Int
+        maximumOutputBytes: Int,
+        validateLaunchedProcess: @Sendable (pid_t) -> Bool = { _ in true }
     ) throws -> BoundedProcessResult {
         precondition(
             timeoutSeconds.isFinite && timeoutSeconds > 0 && timeoutSeconds <= 3_600
@@ -111,6 +112,11 @@ package enum BoundedProcessRunner {
         }
 
         try process.run()
+        guard validateLaunchedProcess(process.processIdentifier) else {
+            process.terminate()
+            process.waitUntilExit()
+            throw BoundedProcessRunnerError.identityRejected
+        }
 
         DispatchQueue.global(qos: .utility).async {
             do {
@@ -165,6 +171,10 @@ package enum BoundedProcessRunner {
         let nanoseconds = Int(seconds * 1_000_000_000)
         return .now() + .nanoseconds(nanoseconds)
     }
+}
+
+package enum BoundedProcessRunnerError: Error {
+    case identityRejected
 }
 
 package enum StaticWorkerBoundary {

@@ -271,6 +271,23 @@ struct StaticWorkerBoundaryTests {
         #expect(oversizedResult.outputDrainCompleted)
     }
 
+    @Test("A rejected launched process is terminated before its output can be trusted")
+    func processIdentityRejectionFailsClosed() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["5"]
+
+        #expect(throws: BoundedProcessRunnerError.self) {
+            try BoundedProcessRunner.run(
+                process,
+                timeoutSeconds: 1,
+                maximumOutputBytes: 1_024,
+                validateLaunchedProcess: { _ in false }
+            )
+        }
+        #expect(!process.isRunning)
+    }
+
     @Test(
         "Malformed, oversized, mismatched, and incompletely drained worker output never passes",
         arguments: InvalidWorkerResult.allCases

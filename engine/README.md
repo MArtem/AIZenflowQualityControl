@@ -11,11 +11,13 @@ evidence remains blocked until a dedicated OS-backed immutable-snapshot provider
 mount flag alone does not prove that a remote server or another mount cannot alter the data. The
 engine does not create or mount privileged snapshots. The public in-memory `EvidenceProducer` and
 package-internal static coordinator both fail closed. `quality static-evidence` is the narrow public
-boundary for one exact static execution: it binds engine build provenance, source/engine checkout
+boundary for one exact static execution: it binds a caller-trusted macOS CodeDirectory hash for the
+already-running parent and worker, source/engine checkout
 identities and revisions, descriptor-pinned profile/policy bytes, observed toolchain output, and an
 authenticated worker scan of a bounded exact Git-tree manifest before coordinator/verifier can emit
 evidence. It is not a general workflow producer and does not prove runtime or review outcomes; no
-cryptographic attestation exists. Future execution surfaces must consult the permission evaluator
+cryptographic attestation exists. The caller's trusted workflow supplies the expected executable
+identity; the CLI does not derive it from source or a mutable binary path. Future execution surfaces must consult the permission evaluator
 before acting and must not infer user authorization from untrusted evidence.
 `quality validate-evidence-expectation` is a structural validator only; its input remains
 untrusted and cannot produce an evidence verdict.

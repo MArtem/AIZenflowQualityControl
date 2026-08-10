@@ -20,16 +20,9 @@ let package = Package(
             name: "QualityCLI",
             dependencies: ["QualityCore"],
             path: "engine/Sources/QualityCLI",
-            plugins: ["EngineBuildProvenancePlugin"]
-        ),
-        .executableTarget(
-            name: "EngineBuildProvenanceGenerator",
-            path: "tools/EngineBuildProvenanceGenerator"
-        ),
-        .plugin(
-            name: "EngineBuildProvenancePlugin",
-            capability: .buildTool(),
-            dependencies: ["EngineBuildProvenanceGenerator"]
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         ),
         .testTarget(
             name: "QualityCoreTests",

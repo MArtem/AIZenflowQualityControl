@@ -9,6 +9,7 @@ package struct StaticEvidenceObservedContext: Sendable {
     package let sourceRepository: String
     package let sourceRevision: String
     package let engineRevision: String
+    package let engineCodeDirectoryHash: String
     package let toolchain: EvidenceToolchain
     package let profileSnapshot: ProfileSnapshot
     package let policySHA256: String
@@ -17,6 +18,7 @@ package struct StaticEvidenceObservedContext: Sendable {
         sourceRepository: String,
         sourceRevision: String,
         engineRevision: String,
+        engineCodeDirectoryHash: String,
         toolchain: EvidenceToolchain,
         profileSnapshot: ProfileSnapshot,
         policySHA256: String
@@ -24,6 +26,7 @@ package struct StaticEvidenceObservedContext: Sendable {
         self.sourceRepository = sourceRepository
         self.sourceRevision = sourceRevision
         self.engineRevision = engineRevision
+        self.engineCodeDirectoryHash = engineCodeDirectoryHash
         self.toolchain = toolchain
         self.profileSnapshot = profileSnapshot
         self.policySHA256 = policySHA256
@@ -84,6 +87,7 @@ package enum StaticEvidenceCoordinator {
                 sourceRevision: context.sourceRevision,
                 engineVersion: engineVersion,
                 engineRevision: context.engineRevision,
+                engineCodeDirectoryHash: context.engineCodeDirectoryHash,
                 profileSHA256: profileSHA256,
                 policySHA256: policySHA256
             ),
@@ -149,15 +153,17 @@ package enum StaticEvidenceCoordinator {
         sourceRevision: String,
         engineVersion: String,
         engineRevision: String,
+        engineCodeDirectoryHash: String,
         profileSHA256: String,
         policySHA256: String
     ) -> String {
         let canonicalInput = [
-            "aizenflow-quality/static-evidence-command/v1",
+            "aizenflow-quality/static-evidence-command/v2",
             sourceRepository,
             sourceRevision,
             engineVersion,
             engineRevision,
+            engineCodeDirectoryHash,
             profileSHA256,
             policySHA256
         ].joined(separator: "\n")
@@ -170,6 +176,7 @@ package enum StaticEvidenceCoordinator {
         isBoundedNonEmptyString(context.sourceRepository)
             && isLowercaseHex(context.sourceRevision, count: 40)
             && isLowercaseHex(context.engineRevision, count: 40)
+            && isLowercaseHex(context.engineCodeDirectoryHash, count: 40)
             && isLowercaseHex(context.policySHA256, count: 64)
             && isBoundedNonEmptyString(context.toolchain.swiftVersion)
             && isBoundedNonEmptyString(context.toolchain.xcodeVersion)
