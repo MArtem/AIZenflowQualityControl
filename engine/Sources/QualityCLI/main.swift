@@ -464,7 +464,10 @@ private func runStaticEvidence(
     guard ProcessCodeIdentity.currentCodeDirectoryHash() == expectedEngineCodeDirectoryHash else {
         return staticEvidenceBlocked("QC.STATIC_EVIDENCE.EXECUTABLE_UNTRUSTED", "The running executable code identity did not match the caller-trusted engine CodeDirectory hash.")
     }
-    let deadlineEpochSeconds = String(Date().timeIntervalSince1970 + StaticWorkerBoundary.hardTimeoutSeconds)
+    let deadlineEpochSeconds = StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+        inheritedDeadlineEpochSeconds: ProcessInfo.processInfo.environment[staticJobDeadlineEnvironmentKey],
+        nowEpochSeconds: Date().timeIntervalSince1970
+    )
     guard let source = observedGitCheckout(at: sourceRoot),
           let engine = observedGitCheckout(at: engineRoot),
           githubRepositoryIdentity(from: source.origin) == expectedSourceRepository,

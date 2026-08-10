@@ -14,6 +14,24 @@ struct StaticWorkerBoundaryTests {
             ) == StaticWorkerBoundary.hardTimeoutSeconds
         )
         #expect(
+            StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+                inheritedDeadlineEpochSeconds: "250",
+                nowEpochSeconds: 100
+            ) == "250.0"
+        )
+        #expect(
+            StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+                inheritedDeadlineEpochSeconds: "1000",
+                nowEpochSeconds: 100
+            ) == "345.0"
+        )
+        #expect(
+            StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+                inheritedDeadlineEpochSeconds: "invalid",
+                nowEpochSeconds: 100
+            ) == "invalid"
+        )
+        #expect(
             StaticWorkerBoundary.timeoutSeconds(
                 deadlineEpochSeconds: "250",
                 nowEpochSeconds: 100
@@ -274,9 +292,10 @@ struct StaticWorkerBoundaryTests {
     @Test("A rejected launched process is terminated before its output can be trusted")
     func processIdentityRejectionFailsClosed() throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
-        process.arguments = ["5"]
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "trap '' TERM; exec /bin/sleep 5"]
 
+        let start = Date()
         #expect(throws: BoundedProcessRunnerError.self) {
             try BoundedProcessRunner.run(
                 process,
@@ -285,6 +304,7 @@ struct StaticWorkerBoundaryTests {
                 validateLaunchedProcess: { _ in false }
             )
         }
+        #expect(Date().timeIntervalSince(start) < 3)
         #expect(!process.isRunning)
     }
 

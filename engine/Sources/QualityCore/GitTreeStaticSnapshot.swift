@@ -15,6 +15,9 @@ package enum GitTreeStaticSnapshotError: Error {
 package struct GitTreeStaticSnapshot: Sendable {
     package static let maximumManifestBytes = 32 * 1_024 * 1_024
     package static let maximumEntries = 100_000
+    // Leave one MiB for the response envelope, input digests, and profile/policy checks.
+    private static let maximumEncodedManifestCheckBytes =
+        StaticWorkerBoundary.maximumOutputBytes - 1_024 * 1_024
 
     private let entries: [Entry]
     package let sha256: String
@@ -69,37 +72,57 @@ package struct GitTreeStaticSnapshot: Sendable {
         }
         let forbidden = forbiddenFileSuffixes.map { $0.lowercased() }
         var checks: [QualityCheck] = []
+        var encodedCheckBytes = 0
         var regularFiles = 0
-        // Two profile/policy contract checks are added by the worker and one manifest entry can
-        // produce both an artifact and a type/size finding before this loop regains control.
-        let maximumFindings = StaticEvidenceResultLimits.maximumChecks - 4
+        // The worker adds a profile check, a policy check, and this scanner's limit check.
+        let maximumFindings = StaticEvidenceResultLimits.maximumChecks - 3
         var limitReached = false
+
+        func appendFinding(_ check: QualityCheck) -> Bool {
+            guard checks.count < maximumFindings,
+                  let encodedBytes = try? JSONEncoder().encode(check).count,
+                  encodedCheckBytes + encodedBytes <= Self.maximumEncodedManifestCheckBytes else {
+                return false
+            }
+            checks.append(check)
+            encodedCheckBytes += encodedBytes
+            return true
+        }
+
         sourceLoop: for sourcePath in sourcePaths.sorted() {
             let prefix = sourcePath == "." ? "" : sourcePath + "/"
             let scoped = entries.filter { prefix.isEmpty || $0.path.hasPrefix(prefix) }
             guard !scoped.isEmpty else {
-                checks.append(QualityCheck(id: "QC.STATIC.SOURCE_PATH", status: .blocked, message: "Configured source path has no Git-tree entries.", path: sourcePath))
-                continue
-            }
-            for entry in scoped {
-                guard checks.count < maximumFindings else {
+                guard appendFinding(QualityCheck(id: "QC.STATIC.SOURCE_PATH", status: .blocked, message: "Configured source path has no Git-tree entries.", path: sourcePath)) else {
                     limitReached = true
                     break sourceLoop
                 }
+                continue
+            }
+            for entry in scoped {
                 let components = entry.path.split(separator: "/").map(String.init)
                 if components.contains(where: { component in
                     forbidden.contains { component.lowercased().hasSuffix($0) }
                 }) {
-                    checks.append(QualityCheck(id: "QC.STATIC.FORBIDDEN_ARTIFACT", status: .fail, message: "Generated or release artifact is forbidden in source scope.", path: entry.path))
+                    guard appendFinding(QualityCheck(id: "QC.STATIC.FORBIDDEN_ARTIFACT", status: .fail, message: "Generated or release artifact is forbidden in source scope.", path: entry.path)) else {
+                        limitReached = true
+                        break sourceLoop
+                    }
                 }
                 guard !components.dropLast().contains(where: { excludedDirectoryNames.contains($0) }) else { continue }
                 switch entry.kind {
                 case .symlink:
-                    checks.append(QualityCheck(id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW", status: .blocked, message: "Symbolic links require explicit boundary review.", path: entry.path))
+                    guard appendFinding(QualityCheck(id: "QC.STATIC.SYMLINK_REQUIRES_REVIEW", status: .blocked, message: "Symbolic links require explicit boundary review.", path: entry.path)) else {
+                        limitReached = true
+                        break sourceLoop
+                    }
                 case .file:
                     regularFiles += 1
                     if entry.size > Int64(maximumFileBytes) {
-                        checks.append(QualityCheck(id: "QC.STATIC.OVERSIZED_FILE", status: .fail, message: "File exceeds the configured maximum byte size.", path: entry.path))
+                        guard appendFinding(QualityCheck(id: "QC.STATIC.OVERSIZED_FILE", status: .fail, message: "File exceeds the configured maximum byte size.", path: entry.path)) else {
+                            limitReached = true
+                            break sourceLoop
+                        }
                     }
                 }
             }

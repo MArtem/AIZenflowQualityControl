@@ -29,13 +29,19 @@
             {
               "properties": {
                 "claimedVerdict": { "const": "READY" },
+                "testCounts": false,
+                "reviewRevision": false,
+                "artifacts": { "maxItems": 0 },
+                "residualRisks": { "maxItems": 0 },
                 "commands": {
                   "minItems": 1,
                   "maxItems": 1,
                   "items": {
                     "properties": {
                       "id": { "const": "static" },
-                      "exitCode": { "const": 0 }
+                      "exitCode": { "const": 0 },
+                      "actions": { "maxItems": 0 },
+                      "authorization": { "const": "NOT_REQUIRED" }
                     }
                   }
                 },
@@ -46,7 +52,8 @@
                     "properties": {
                       "id": { "const": "QC.STATIC" },
                       "status": { "const": "PASS" },
-                      "commandID": { "const": "static" }
+                      "commandID": { "const": "static" },
+                      "actions": { "maxItems": 0 }
                     }
                   }
                 }

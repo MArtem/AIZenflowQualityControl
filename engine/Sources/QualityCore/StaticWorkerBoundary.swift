@@ -113,8 +113,8 @@ package enum BoundedProcessRunner {
 
         try process.run()
         guard validateLaunchedProcess(process.processIdentifier) else {
-            process.terminate()
-            process.waitUntilExit()
+            terminateBoundedly(process, processTerminated: processTerminated)
+            outputPipe.fileHandleForReading.closeFile()
             throw BoundedProcessRunnerError.identityRejected
         }
 
@@ -135,16 +135,7 @@ package enum BoundedProcessRunner {
         ) == .timedOut
 
         if timedOut {
-            process.terminate()
-            if processTerminated.wait(
-                timeout: deadline(after: terminationGraceSeconds)
-            ) == .timedOut,
-               process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-                _ = processTerminated.wait(
-                    timeout: deadline(after: terminationGraceSeconds)
-                )
-            }
+            terminateBoundedly(process, processTerminated: processTerminated)
         }
 
         let drainReachedEnd = outputDrained.wait(
@@ -170,6 +161,22 @@ package enum BoundedProcessRunner {
     private static func deadline(after seconds: TimeInterval) -> DispatchTime {
         let nanoseconds = Int(seconds * 1_000_000_000)
         return .now() + .nanoseconds(nanoseconds)
+    }
+
+    private static func terminateBoundedly(
+        _ process: Process,
+        processTerminated: DispatchSemaphore
+    ) {
+        process.terminate()
+        if processTerminated.wait(
+            timeout: deadline(after: terminationGraceSeconds)
+        ) == .timedOut,
+           process.isRunning {
+            Darwin.kill(process.processIdentifier, SIGKILL)
+            _ = processTerminated.wait(
+                timeout: deadline(after: terminationGraceSeconds)
+            )
+        }
     }
 }
 
@@ -200,6 +207,21 @@ package enum StaticWorkerBoundary {
             return nil
         }
         return min(hardTimeoutSeconds, available)
+    }
+
+    package static func boundedDeadlineEpochSeconds(
+        inheritedDeadlineEpochSeconds: String?,
+        nowEpochSeconds: TimeInterval
+    ) -> String {
+        let localDeadline = nowEpochSeconds + hardTimeoutSeconds
+        guard let inheritedDeadlineEpochSeconds else {
+            return String(localDeadline)
+        }
+        guard let inheritedDeadline = TimeInterval(inheritedDeadlineEpochSeconds),
+              inheritedDeadline.isFinite else {
+            return inheritedDeadlineEpochSeconds
+        }
+        return String(min(inheritedDeadline, localDeadline))
     }
 
     package static func deadlineBudgetFailure() -> QualityReport {

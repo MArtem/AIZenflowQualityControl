@@ -80,4 +80,24 @@ struct StaticEvidenceExecutionTests {
         )
         #expect(checks.map(\.id) == ["QC.STATIC.FORBIDDEN_ARTIFACT"])
     }
+
+    @Test("Manifest findings reserve the worker response byte envelope")
+    func manifestFindingsRespectEncodedResponseBudget() throws {
+        let manifest = (0..<1_500).map { index in
+            let path = "Sources/" + String(repeating: "\u{0001}", count: 1_001)
+                + "-" + String(format: "%04d", index) + ".xcarchive"
+            return "100644 blob 0123456789012345678901234567890123456789 1\t\(path)\0"
+        }.joined()
+        let snapshot = try GitTreeStaticSnapshot(manifest: Data(manifest.utf8))
+
+        let checks = snapshot.staticChecks(
+            sourcePaths: ["Sources"],
+            maximumFileBytes: 16,
+            excludedDirectoryNames: [],
+            forbiddenFileSuffixes: [".xcarchive"]
+        )
+
+        #expect(checks.last?.id == "QC.STATIC.SCAN_LIMIT_REACHED")
+        #expect(checks.count < StaticEvidenceResultLimits.maximumChecks - 3)
+    }
 }
