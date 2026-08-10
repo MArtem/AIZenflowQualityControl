@@ -70,7 +70,11 @@ package struct GitTreeStaticSnapshot: Sendable {
         let forbidden = forbiddenFileSuffixes.map { $0.lowercased() }
         var checks: [QualityCheck] = []
         var regularFiles = 0
-        for sourcePath in sourcePaths.sorted() {
+        // Two profile/policy contract checks are added by the worker and one manifest entry can
+        // produce both an artifact and a type/size finding before this loop regains control.
+        let maximumFindings = StaticEvidenceResultLimits.maximumChecks - 4
+        var limitReached = false
+        sourceLoop: for sourcePath in sourcePaths.sorted() {
             let prefix = sourcePath == "." ? "" : sourcePath + "/"
             let scoped = entries.filter { prefix.isEmpty || $0.path.hasPrefix(prefix) }
             guard !scoped.isEmpty else {
@@ -78,6 +82,10 @@ package struct GitTreeStaticSnapshot: Sendable {
                 continue
             }
             for entry in scoped {
+                guard checks.count < maximumFindings else {
+                    limitReached = true
+                    break sourceLoop
+                }
                 let components = entry.path.split(separator: "/").map(String.init)
                 if components.contains(where: { component in
                     forbidden.contains { component.lowercased().hasSuffix($0) }
@@ -95,6 +103,10 @@ package struct GitTreeStaticSnapshot: Sendable {
                     }
                 }
             }
+        }
+        if limitReached {
+            checks.append(QualityCheck(id: "QC.STATIC.SCAN_LIMIT_REACHED", status: .blocked, message: "Static manifest scan stopped at the public evidence finding limit."))
+            return checks
         }
         if checks.contains(where: { $0.status != .pass }) { return checks }
         if regularFiles == 0 {

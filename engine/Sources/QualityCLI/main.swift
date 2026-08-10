@@ -588,7 +588,7 @@ do {
     case "static":
         let options = try parseOptions(
             arguments.dropFirst(2),
-            allowed: ["--profile", "--policy", "--repository-root", "--manifest"]
+            allowed: ["--profile", "--policy", "--repository-root"]
         )
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
@@ -602,25 +602,29 @@ do {
         )
 
     case "static-evidence":
-        let options = try parseOptions(
-            arguments.dropFirst(2),
-            allowed: [
-                "--profile", "--policy", "--repository-root", "--engine-repository-root",
-                "--snapshot-root", "--source-repository", "--expected-source-revision", "--expected-engine-revision"
-            ]
-        )
-        emitStaticEvidence(
-            runStaticEvidence(
-                profileURL: fileURL(try required("--profile", in: options)),
-                policyURL: fileURL(try required("--policy", in: options)),
-                sourceRoot: fileURL(try required("--repository-root", in: options)),
-                engineRoot: fileURL(try required("--engine-repository-root", in: options)),
-                snapshotRoot: fileURL(try required("--snapshot-root", in: options)),
-                expectedSourceRepository: try required("--source-repository", in: options),
-                expectedSourceRevision: try required("--expected-source-revision", in: options),
-                expectedEngineRevision: try required("--expected-engine-revision", in: options)
+        do {
+            let options = try parseOptions(
+                arguments.dropFirst(2),
+                allowed: [
+                    "--profile", "--policy", "--repository-root", "--engine-repository-root",
+                    "--snapshot-root", "--source-repository", "--expected-source-revision", "--expected-engine-revision"
+                ]
             )
-        )
+            emitStaticEvidence(
+                runStaticEvidence(
+                    profileURL: fileURL(try required("--profile", in: options)),
+                    policyURL: fileURL(try required("--policy", in: options)),
+                    sourceRoot: fileURL(try required("--repository-root", in: options)),
+                    engineRoot: fileURL(try required("--engine-repository-root", in: options)),
+                    snapshotRoot: fileURL(try required("--snapshot-root", in: options)),
+                    expectedSourceRepository: try required("--source-repository", in: options),
+                    expectedSourceRevision: try required("--expected-source-revision", in: options),
+                    expectedEngineRevision: try required("--expected-engine-revision", in: options)
+                )
+            )
+        } catch {
+            emitStaticEvidence(staticEvidenceBlocked("QC.CLI.INVALID_ARGUMENTS", "Static evidence command arguments are invalid."))
+        }
 
     case "__static-worker":
         guard ProcessInfo.processInfo.environment[staticWorkerEnvironmentKey] == "1",

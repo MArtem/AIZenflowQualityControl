@@ -30,6 +30,10 @@ struct EngineBuildProvenanceGenerator {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["-C", root.path] + arguments
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        process.environment = environment
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
