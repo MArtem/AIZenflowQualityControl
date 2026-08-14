@@ -4,16 +4,19 @@
 
 ## Purpose
 
-This compact, versioned fallback keeps an adopted repository operable in a clean clone, CI runner,
-or external review worktree where the canonical documentation vault is unavailable. It is not a
-second authority and must never be described as the latest canonical baseline.
+This compact, versioned fallback keeps an adopted repository operable in an authorized clean clone
+or review worktree under `/Users/Artem/.zenflow` where the canonical documentation vault is
+unavailable. It is not a second authority and must never be described as the latest canonical
+baseline.
 
 ## Activation
 
 Use this snapshot only when
 `/Users/Artem/.zenflow/worktrees/documentation-vault/reusable/GLOBAL_RULES_BOOTSTRAP.md` cannot be
 read. Respect the already-loaded repository `AGENTS.md` and tracked local documentation; do not
-fetch, invent, or borrow rules from another app or archive. Report
+fetch, invent, or borrow rules from another app or archive. This fallback never authorizes work
+outside `/Users/Artem/.zenflow`; an external CI runner or checkout remains blocked until the user
+grants a separate sandbox. Report
 `canonical-baseline-unavailable` and this snapshot marker in the handoff, receipt, or completion
 report.
 
