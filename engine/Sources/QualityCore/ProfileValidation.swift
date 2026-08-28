@@ -272,7 +272,10 @@ public enum ProfileLoader {
                 "sourcePaths",
                 "mode",
                 "permissions",
-                "sandbox"
+                "sandbox",
+                "engine",
+                "xcode",
+                "applicability"
             ]
         )
 
@@ -297,6 +300,34 @@ public enum ProfileLoader {
 
         if let sandbox = profile["sandbox"] as? [String: Any] {
             try rejectUnknownProperties(in: sandbox, allowed: ["root", "cache"])
+        }
+
+        if let engine = profile["engine"] as? [String: Any] {
+            try rejectUnknownProperties(in: engine, allowed: ["version", "revision"])
+        }
+
+        if let xcode = profile["xcode"] as? [String: Any] {
+            try rejectUnknownProperties(in: xcode, allowed: ["sourceMembership", "schemes"])
+            if let membership = xcode["sourceMembership"] as? [String: Any] {
+                try rejectUnknownProperties(in: membership, allowed: ["authority"])
+            }
+            if let schemes = xcode["schemes"] as? [[String: Any]] {
+                for scheme in schemes {
+                    try rejectUnknownProperties(
+                        in: scheme,
+                        allowed: ["name", "targets", "configurations", "destinations", "testPlans"]
+                    )
+                }
+            }
+        }
+
+        if let applicability = profile["applicability"] as? [[String: Any]] {
+            for decision in applicability {
+                try rejectUnknownProperties(
+                    in: decision,
+                    allowed: ["capability", "status", "reason", "owner", "revisitCondition"]
+                )
+            }
         }
     }
 
@@ -327,6 +358,8 @@ private struct UnknownProfilePropertyError: Error {}
 
 private enum ProfileValidationLimits {
     static let maximumSourcePaths = 256
+    static let maximumSchemes = 32
+    static let maximumSchemeValues = 64
     static let maximumIssues = 256
 }
 
@@ -334,12 +367,12 @@ public enum ProfileValidator {
     public static func validate(_ profile: ProjectProfile) -> [ValidationIssue] {
         var issues: [ValidationIssue] = []
 
-        if profile.schemaVersion != 1 {
+        if ![1, 2].contains(profile.schemaVersion) {
             issues.append(
                 ValidationIssue(
                     code: "QC.PROFILE.UNSUPPORTED_SCHEMA",
                     path: "schemaVersion",
-                    message: "Only project profile schemaVersion 1 is supported."
+                    message: "Only project profile schemaVersion 1 or 2 is supported."
                 )
             )
         }
@@ -367,15 +400,7 @@ public enum ProfileValidator {
             break
         }
 
-        if profile.scheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            issues.append(
-                ValidationIssue(
-                    code: "QC.PROFILE.EMPTY_SCHEME",
-                    path: "scheme",
-                    message: "The scheme must be explicitly provided."
-                )
-            )
-        }
+        issues.append(contentsOf: validateVersionedFields(profile))
 
         if profile.sourcePaths.isEmpty {
             issues.append(
@@ -426,36 +451,386 @@ public enum ProfileValidator {
             }
         }
 
-        if !isAbsolute(profile.sandbox.root) {
-            issues.append(
-                ValidationIssue(
-                    code: "QC.PROFILE.SANDBOX_ROOT_NOT_ABSOLUTE",
-                    path: "sandbox.root",
-                    message: "The sandbox root must be an absolute path."
-                )
-            )
-        }
-
-        if !isAbsolute(profile.sandbox.cache) {
-            issues.append(
-                ValidationIssue(
-                    code: "QC.PROFILE.CACHE_NOT_ABSOLUTE",
-                    path: "sandbox.cache",
-                    message: "The cache path must be an absolute path."
-                )
-            )
-        } else if isAbsolute(profile.sandbox.root)
-            && !isDescendant(profile.sandbox.cache, of: profile.sandbox.root) {
-            issues.append(
-                ValidationIssue(
-                    code: "QC.PROFILE.CACHE_OUTSIDE_SANDBOX",
-                    path: "sandbox.cache",
-                    message: "The cache path must remain inside the configured sandbox root."
-                )
-            )
-        }
+        issues.append(contentsOf: validateSandboxPaths(profile))
 
         return boundedIssues(issues)
+    }
+
+    private static func validateVersionedFields(_ profile: ProjectProfile) -> [ValidationIssue] {
+        switch profile.schemaVersion {
+        case 1:
+            var issues: [ValidationIssue] = []
+            if profile.scheme?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.EMPTY_SCHEME",
+                        path: "scheme",
+                        message: "A schemaVersion 1 profile must provide one scheme."
+                    )
+                )
+            }
+            if profile.engine != nil || profile.xcode != nil || profile.applicability != nil {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.VERSION_FIELD_MISMATCH",
+                        path: "$",
+                        message: "SchemaVersion 2 fields are forbidden in a schemaVersion 1 profile."
+                    )
+                )
+            }
+            return issues
+        case 2:
+            var issues: [ValidationIssue] = []
+            if profile.scheme != nil {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.VERSION_FIELD_MISMATCH",
+                        path: "scheme",
+                        message: "A schemaVersion 2 profile declares schemes only through xcode.schemes."
+                    )
+                )
+            }
+            issues.append(contentsOf: validateEnginePin(profile.engine))
+            issues.append(contentsOf: validateXcodeConfiguration(profile.xcode))
+            issues.append(contentsOf: validateApplicability(profile.applicability))
+            issues.append(
+                ValidationIssue(
+                    code: "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED",
+                    path: "xcode.sourceMembership",
+                    message: "SchemaVersion 2 remains blocked until authoritative Xcode graph resolution succeeds."
+                )
+            )
+            return issues
+        default:
+            return []
+        }
+    }
+
+    private static func validateEnginePin(_ engine: EnginePin?) -> [ValidationIssue] {
+        guard let engine else {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.MISSING_ENGINE_PIN",
+                    path: "engine",
+                    message: "A schemaVersion 2 profile must pin an engine version and revision."
+                )
+            ]
+        }
+
+        var issues: [ValidationIssue] = []
+        if isBlank(engine.version) {
+            issues.append(
+                ValidationIssue(
+                    code: "QC.PROFILE.EMPTY_ENGINE_VERSION",
+                    path: "engine.version",
+                    message: "The pinned engine version must not be empty."
+                )
+            )
+        }
+        let revisionBytes = Array(engine.revision.utf8)
+        if revisionBytes.count != 40
+            || revisionBytes.contains(where: { !(48...57).contains($0) && !(97...102).contains($0) }) {
+            issues.append(
+                ValidationIssue(
+                    code: "QC.PROFILE.INVALID_ENGINE_REVISION",
+                    path: "engine.revision",
+                    message: "The pinned engine revision must be 40 lowercase hexadecimal characters."
+                )
+            )
+        }
+        return issues
+    }
+
+    private static func validateXcodeConfiguration(
+        _ xcode: XcodeConfiguration?
+    ) -> [ValidationIssue] {
+        guard let xcode else {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.MISSING_XCODE_CONFIGURATION",
+                    path: "xcode",
+                    message: "A schemaVersion 2 profile must declare its Xcode graph selection."
+                )
+            ]
+        }
+
+        var issues: [ValidationIssue] = []
+        guard !xcode.schemes.isEmpty else {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.EMPTY_SCHEMES",
+                    path: "xcode.schemes",
+                    message: "At least one shared Xcode scheme must be declared."
+                )
+            ]
+        }
+        if xcode.schemes.count > ProfileValidationLimits.maximumSchemes {
+            issues.append(
+                ValidationIssue(
+                    code: "QC.PROFILE.SCHEME_LIMIT",
+                    path: "xcode.schemes",
+                    message: "A profile may contain at most \(ProfileValidationLimits.maximumSchemes) schemes."
+                )
+            )
+            return issues
+        }
+
+        var schemeNames = Set<String>()
+        for (index, scheme) in xcode.schemes.enumerated() {
+            let path = "xcode.schemes[\(index)]"
+            if isBlank(scheme.name) || !schemeNames.insert(scheme.name).inserted {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.INVALID_SCHEME",
+                        path: "\(path).name",
+                        message: "Scheme names must be non-empty and unique."
+                    )
+                )
+            }
+            issues.append(contentsOf: validateStringList(scheme.targets, path: "\(path).targets", allowsEmpty: false))
+            issues.append(contentsOf: validateStringList(scheme.configurations, path: "\(path).configurations", allowsEmpty: false))
+            issues.append(contentsOf: validateStringList(scheme.destinations, path: "\(path).destinations", allowsEmpty: false))
+            issues.append(contentsOf: validateStringList(scheme.testPlans, path: "\(path).testPlans", allowsEmpty: true))
+            for (testPlanIndex, testPlan) in scheme.testPlans.enumerated() {
+                issues.append(contentsOf: validateRelativePath(
+                    testPlan,
+                    field: "\(path).testPlans[\(testPlanIndex)]"
+                ))
+            }
+        }
+        return issues
+    }
+
+    private static func validateApplicability(
+        _ applicability: [CapabilityApplicability]?
+    ) -> [ValidationIssue] {
+        guard let applicability else {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.MISSING_APPLICABILITY",
+                    path: "applicability",
+                    message: "A schemaVersion 2 profile must classify every governed capability."
+                )
+            ]
+        }
+
+        var issues: [ValidationIssue] = []
+        var capabilities = Set<CapabilityID>()
+        for (index, decision) in applicability.enumerated() {
+            let path = "applicability[\(index)]"
+            if !capabilities.insert(decision.capability).inserted {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.DUPLICATE_APPLICABILITY",
+                        path: "\(path).capability",
+                        message: "Each governed capability must be classified exactly once."
+                    )
+                )
+            }
+            for (field, value) in [
+                ("reason", decision.reason),
+                ("owner", decision.owner),
+                ("revisitCondition", decision.revisitCondition)
+            ] where isBlank(value) {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.EMPTY_APPLICABILITY_FIELD",
+                        path: "\(path).\(field)",
+                        message: "Applicability reason, owner, and revisit condition are mandatory."
+                    )
+                )
+            }
+        }
+
+        let missing = Set(CapabilityID.allCases).subtracting(capabilities)
+        if !missing.isEmpty {
+            issues.append(
+                ValidationIssue(
+                    code: "QC.PROFILE.INCOMPLETE_APPLICABILITY",
+                    path: "applicability",
+                    message: "Every governed capability must be classified exactly once."
+                )
+            )
+        }
+        return issues
+    }
+
+    private static func validateStringList(
+        _ values: [String],
+        path: String,
+        allowsEmpty: Bool
+    ) -> [ValidationIssue] {
+        if values.isEmpty && !allowsEmpty {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.EMPTY_XCODE_SELECTION",
+                    path: path,
+                    message: "This Xcode selection must not be empty."
+                )
+            ]
+        }
+        if values.count > ProfileValidationLimits.maximumSchemeValues {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.XCODE_SELECTION_LIMIT",
+                    path: path,
+                    message: "An Xcode selection may contain at most \(ProfileValidationLimits.maximumSchemeValues) values."
+                )
+            ]
+        }
+
+        var accepted = Set<String>()
+        var issues: [ValidationIssue] = []
+        for (index, value) in values.enumerated()
+            where isBlank(value) || !accepted.insert(value).inserted {
+            issues.append(
+                ValidationIssue(
+                    code: "QC.PROFILE.INVALID_XCODE_SELECTION",
+                    path: "\(path)[\(index)]",
+                    message: "Xcode selection values must be non-empty and unique."
+                )
+            )
+        }
+        return issues
+    }
+
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func validateSandboxPaths(_ profile: ProjectProfile) -> [ValidationIssue] {
+        switch profile.schemaVersion {
+        case 2:
+            var issues = validatePortableSandboxPath(
+                profile.sandbox.root,
+                field: "sandbox.root"
+            )
+            issues.append(contentsOf: validatePortableSandboxPath(
+                profile.sandbox.cache,
+                field: "sandbox.cache"
+            ))
+            if issues.isEmpty,
+               !isDescendant(profile.sandbox.cache, of: profile.sandbox.root) {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.CACHE_OUTSIDE_SANDBOX",
+                        path: "sandbox.cache",
+                        message: "The cache path must remain strictly below the configured sandbox root."
+                    )
+                )
+            }
+            return issues
+        default:
+            var issues: [ValidationIssue] = []
+            if !isAbsolute(profile.sandbox.root) {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.SANDBOX_ROOT_NOT_ABSOLUTE",
+                        path: "sandbox.root",
+                        message: "A schemaVersion 1 sandbox root must be an absolute path."
+                    )
+                )
+            }
+            if !isAbsolute(profile.sandbox.cache) {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.CACHE_NOT_ABSOLUTE",
+                        path: "sandbox.cache",
+                        message: "A schemaVersion 1 cache path must be an absolute path."
+                    )
+                )
+            } else if isAbsolute(profile.sandbox.root)
+                && !isDescendant(profile.sandbox.cache, of: profile.sandbox.root) {
+                issues.append(
+                    ValidationIssue(
+                        code: "QC.PROFILE.CACHE_OUTSIDE_SANDBOX",
+                        path: "sandbox.cache",
+                        message: "The cache path must remain inside the configured sandbox root."
+                    )
+                )
+            }
+            return issues
+        }
+    }
+
+    private static func validatePortableSandboxPath(
+        _ value: String,
+        field: String
+    ) -> [ValidationIssue] {
+        if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.EMPTY_PATH",
+                    path: field,
+                    message: "The path must not be empty."
+                )
+            ]
+        }
+        if isAbsolute(value) || value.hasPrefix("~") {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.SANDBOX_PATH_NOT_RELATIVE",
+                    path: field,
+                    message: "A schemaVersion 2 sandbox path must be relative to the repository root."
+                )
+            ]
+        }
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        if components.contains("..") {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.PATH_TRAVERSAL",
+                    path: field,
+                    message: "Parent-directory traversal is forbidden."
+                )
+            ]
+        }
+
+        guard value != ".",
+              !components.contains(where: { $0.isEmpty || $0 == "." }),
+              (value as NSString).standardizingPath == value else {
+            return [
+                ValidationIssue(
+                    code: "QC.PROFILE.NON_NORMALIZED_SANDBOX_PATH",
+                    path: field,
+                    message: "A schemaVersion 2 sandbox path must be a normalized repository-relative path."
+                )
+            ]
+        }
+        return []
+    }
+
+    static func resolveSandboxPaths(
+        for profile: ProjectProfile,
+        under repositoryRoot: URL
+    ) -> (root: URL, cache: URL)? {
+        switch profile.schemaVersion {
+        case 1:
+            guard isAbsolute(profile.sandbox.root), isAbsolute(profile.sandbox.cache) else {
+                return nil
+            }
+            return (
+                URL(fileURLWithPath: profile.sandbox.root, isDirectory: true),
+                URL(fileURLWithPath: profile.sandbox.cache, isDirectory: true)
+            )
+        case 2:
+            guard validatePortableSandboxPath(
+                      profile.sandbox.root,
+                      field: "sandbox.root"
+                  ).isEmpty,
+                  validatePortableSandboxPath(
+                      profile.sandbox.cache,
+                      field: "sandbox.cache"
+                  ).isEmpty,
+                  let root = resolve(relativePath: profile.sandbox.root, under: repositoryRoot),
+                  let cache = resolve(relativePath: profile.sandbox.cache, under: repositoryRoot),
+                  isDescendant(cache.path, of: root.path) else {
+                return nil
+            }
+            return (root, cache)
+        default:
+            return nil
+        }
     }
 
     static func resolve(relativePath: String, under root: URL) -> URL? {

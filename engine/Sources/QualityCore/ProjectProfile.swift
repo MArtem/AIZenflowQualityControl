@@ -3,11 +3,14 @@ import Foundation
 public struct ProjectProfile: Codable, Sendable {
     public let schemaVersion: Int
     public let project: ProjectReference
-    public let scheme: String
+    public let scheme: String?
     public let sourcePaths: [String]
     public let mode: ProjectMode
     public let permissions: PermissionPolicy
     public let sandbox: SandboxPaths
+    public let engine: EnginePin?
+    public let xcode: XcodeConfiguration?
+    public let applicability: [CapabilityApplicability]?
 }
 
 public struct ProjectReference: Codable, Sendable {
@@ -68,4 +71,55 @@ public struct PermissionPolicy: Codable, Equatable, Sendable {
 public struct SandboxPaths: Codable, Sendable {
     public let root: String
     public let cache: String
+}
+
+public struct EnginePin: Codable, Sendable {
+    public let version: String
+    public let revision: String
+}
+
+public struct XcodeConfiguration: Codable, Sendable {
+    public let sourceMembership: SourceMembership
+    public let schemes: [XcodeScheme]
+}
+
+public struct SourceMembership: Codable, Sendable {
+    public enum Authority: String, Codable, Sendable {
+        case xcodeBuildGraph = "xcode-build-graph"
+    }
+
+    public let authority: Authority
+}
+
+public struct XcodeScheme: Codable, Sendable {
+    public let name: String
+    public let targets: [String]
+    public let configurations: [String]
+    public let destinations: [String]
+    public let testPlans: [String]
+}
+
+public enum CapabilityID: String, Codable, CaseIterable, Hashable, Sendable {
+    case tests
+    case snapshotTests
+    case uiTests
+    case archiveSigning
+    case featureFlags
+    case privacy
+    case observability
+    case platformCapabilities
+}
+
+public enum ApplicabilityStatus: String, Codable, Sendable {
+    case applicable
+    case notApplicable
+    case deferred
+}
+
+public struct CapabilityApplicability: Codable, Sendable {
+    public let capability: CapabilityID
+    public let status: ApplicabilityStatus
+    public let reason: String
+    public let owner: String
+    public let revisitCondition: String
 }

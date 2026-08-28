@@ -382,8 +382,11 @@ public enum QualityCommands {
             return QualityReport(command: "doctor", checks: [check])
         case let .success(profile):
             let issues = ProfileValidator.validate(profile)
-            guard issues.isEmpty else {
-                return QualityReport(command: "doctor", checks: checks(for: issues))
+            let contractIssues = issues.filter {
+                $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+            }
+            guard contractIssues.isEmpty else {
+                return QualityReport(command: "doctor", checks: checks(for: contractIssues))
             }
 
             var checks: [QualityCheck] = [
@@ -470,7 +473,22 @@ public enum QualityCommands {
                 }
             }
 
-            let sandboxRootURL = URL(fileURLWithPath: profile.sandbox.root)
+            guard let sandboxPaths = ProfileValidator.resolveSandboxPaths(
+                for: profile,
+                under: repositoryRoot
+            ) else {
+                checks.append(
+                    QualityCheck(
+                        id: "QC.DOCTOR.SANDBOX_PATH_RESOLUTION",
+                        status: .fail,
+                        message: "Configured sandbox paths could not be resolved safely.",
+                        path: "sandbox"
+                    )
+                )
+                return QualityReport(command: "doctor", checks: checks)
+            }
+
+            let sandboxRootURL = sandboxPaths.root
             let sandboxRootCheck = directoryCheck(
                 id: "QC.DOCTOR.SANDBOX_ROOT",
                 url: sandboxRootURL,
@@ -479,7 +497,18 @@ public enum QualityCommands {
             )
             checks.append(sandboxRootCheck)
 
-            let sandboxCacheURL = URL(fileURLWithPath: profile.sandbox.cache)
+            if profile.schemaVersion == 2, sandboxRootCheck.status == .pass {
+                checks.append(
+                    repositoryBoundaryCheck(
+                        id: "QC.DOCTOR.SANDBOX_ROOT_BOUNDARY",
+                        url: sandboxRootURL,
+                        repositoryRoot: repositoryRoot,
+                        relativePath: profile.sandbox.root
+                    )
+                )
+            }
+
+            let sandboxCacheURL = sandboxPaths.cache
             let sandboxCacheCheck = directoryCheck(
                 id: "QC.DOCTOR.SANDBOX_CACHE",
                 url: sandboxCacheURL,
@@ -504,6 +533,23 @@ public enum QualityCommands {
                         path: profile.sandbox.cache
                     )
                 )
+            }
+
+            if profile.schemaVersion == 2 {
+                if checks.allSatisfy({ $0.status == .pass }) {
+                    checks.append(contentsOf: XcodeGraphDiscovery.checks(
+                        profile: profile,
+                        repositoryRoot: repositoryRoot
+                    ))
+                } else {
+                    checks.append(
+                        QualityCheck(
+                            id: "QC.DOCTOR.XCODE_GRAPH_PREREQUISITES",
+                            status: .blocked,
+                            message: "Xcode graph discovery requires valid repository, project, source, and sandbox boundaries."
+                        )
+                    )
+                }
             }
 
             return QualityReport(command: "doctor", checks: checks)
@@ -1156,7 +1202,9 @@ public enum QualityCommands {
         issues.map {
             QualityCheck(
                 id: $0.code,
-                status: .fail,
+                status: $0.code == "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+                    ? .blocked
+                    : .fail,
                 message: $0.message,
                 path: $0.path
             )

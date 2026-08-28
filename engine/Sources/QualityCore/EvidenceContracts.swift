@@ -51,6 +51,7 @@ private enum EvidenceValidationLimits {
 public enum PermissionAction: String, Codable, CaseIterable, Sendable {
     case testCreation
     case testModification
+    case localBuildExecution
     case localTestExecution
     case githubExecution
     case uiTests
@@ -74,6 +75,8 @@ public enum PermissionEvaluator {
             return requirement(for: policy.testCreation)
         case .testModification:
             return requirement(for: policy.testModification)
+        case .localBuildExecution:
+            return .userAuthorizationRequired
         case .localTestExecution:
             return requirement(for: policy.localTestExecution)
         case .githubExecution:
@@ -668,6 +671,25 @@ public struct EvidenceVerification: Codable, Sendable {
     }
 }
 
+/// A conservative, in-memory aggregation boundary for independently produced gate evidence.
+///
+/// Aggregation never trusts a child claim. It requires every input to share the same immutable
+/// source/engine/profile/toolchain/permission identity, merges only bounded collections, derives
+/// the combined verdict from the merged gates, and runs the normal verifier against the caller's
+/// complete trusted expectation.
+public struct EvidenceAggregationResult: Sendable {
+    public let evidence: QualityEvidence?
+    public let verification: EvidenceVerification
+
+    public init(
+        evidence: QualityEvidence?,
+        verification: EvidenceVerification
+    ) {
+        self.evidence = evidence
+        self.verification = verification
+    }
+}
+
 public enum EvidenceVerifier {
     public static func verify(
         _ evidence: QualityEvidence,
@@ -703,7 +725,8 @@ public enum EvidenceVerifier {
             &issues
         )
         require(
-            evidence.profileSchemaVersion == 1 && expected.profileSchemaVersion == 1,
+            [1, 2].contains(evidence.profileSchemaVersion)
+                && [1, 2].contains(expected.profileSchemaVersion),
             "QC.EVIDENCE.UNSUPPORTED_PROFILE_SCHEMA",
             &issues
         )
@@ -787,6 +810,120 @@ public enum EvidenceVerifier {
             return EvidenceVerification(verdict: .bypassed, issues: issues)
         }
         return EvidenceVerification(verdict: derivedVerdict, issues: [])
+    }
+
+    public static func aggregate(
+        _ evidences: [QualityEvidence],
+        expected: EvidenceExpectation
+    ) -> EvidenceAggregationResult {
+        guard !evidences.isEmpty else {
+            return EvidenceAggregationResult(
+                evidence: nil,
+                verification: EvidenceVerification(
+                    verdict: .bypassed,
+                    issues: [EvidenceVerificationIssue(
+                        code: "QC.EVIDENCE.AGGREGATION_EMPTY",
+                        message: "Evidence aggregation requires at least one input."
+                    )]
+                )
+            )
+        }
+        guard evidences.count <= EvidenceValidationLimits.maximumCollectionItems else {
+            return EvidenceAggregationResult(
+                evidence: nil,
+                verification: EvidenceVerification(
+                    verdict: .bypassed,
+                    issues: [EvidenceVerificationIssue(
+                        code: "QC.EVIDENCE.AGGREGATION_LIMIT",
+                        message: "Evidence aggregation exceeded its bounded input limit."
+                    )]
+                )
+            )
+        }
+
+        let first = evidences[0]
+        let sharedIdentity = evidences.dropFirst().allSatisfy {
+            $0.schemaVersion == first.schemaVersion
+                && $0.sourceRepository == first.sourceRepository
+                && $0.sourceRevision == first.sourceRevision
+                && $0.engineVersion == first.engineVersion
+                && $0.engineRevision == first.engineRevision
+                && $0.profileSchemaVersion == first.profileSchemaVersion
+                && $0.profileSHA256 == first.profileSHA256
+                && $0.toolchain == first.toolchain
+                && $0.permissions == first.permissions
+        }
+        guard sharedIdentity else {
+            return EvidenceAggregationResult(
+                evidence: nil,
+                verification: EvidenceVerification(
+                    verdict: .bypassed,
+                    issues: [EvidenceVerificationIssue(
+                        code: "QC.EVIDENCE.AGGREGATION_IDENTITY_MISMATCH",
+                        message: "Aggregated evidence inputs must share one immutable execution identity."
+                    )]
+                )
+            )
+        }
+
+        let testCounts = evidences.compactMap(\.testCounts)
+        guard testCounts.count <= 1 else {
+            return EvidenceAggregationResult(
+                evidence: nil,
+                verification: EvidenceVerification(
+                    verdict: .bypassed,
+                    issues: [EvidenceVerificationIssue(
+                        code: "QC.EVIDENCE.AGGREGATION_TEST_COUNTS",
+                        message: "At most one aggregated input may carry test counts."
+                    )]
+                )
+            )
+        }
+        let reviewRevisions = evidences.compactMap(\.reviewRevision)
+        guard reviewRevisions.count <= 1 else {
+            return EvidenceAggregationResult(
+                evidence: nil,
+                verification: EvidenceVerification(
+                    verdict: .bypassed,
+                    issues: [EvidenceVerificationIssue(
+                        code: "QC.EVIDENCE.AGGREGATION_REVIEW",
+                        message: "At most one aggregated input may carry a review revision."
+                    )]
+                )
+            )
+        }
+
+        let commands = evidences.flatMap(\.commands)
+        let gates = evidences.flatMap(\.gates)
+        let artifacts = evidences.flatMap(\.artifacts)
+        var residualRisks = Set<String>()
+        for risk in evidences.flatMap(\.residualRisks) {
+            residualRisks.insert(risk)
+        }
+        let sortedResidualRisks = residualRisks.sorted()
+        let combined = QualityEvidence(
+            schemaVersion: first.schemaVersion,
+            sourceRepository: first.sourceRepository,
+            sourceRevision: first.sourceRevision,
+            engineVersion: first.engineVersion,
+            engineRevision: first.engineRevision,
+            profileSchemaVersion: first.profileSchemaVersion,
+            profileSHA256: first.profileSHA256,
+            toolchain: first.toolchain,
+            permissions: first.permissions,
+            commands: commands,
+            gates: gates,
+            testCounts: testCounts.first,
+            reviewRevision: reviewRevisions.first,
+            artifacts: artifacts,
+            residualRisks: sortedResidualRisks,
+            claimedVerdict: derive(gates: gates, residualRisks: sortedResidualRisks)
+        )
+        let verification = verify(combined, expected: expected)
+        return EvidenceAggregationResult(
+            evidence: verification.issues.isEmpty ? combined : nil,
+            verification: verification
+        )
     }
 
     static func derive(

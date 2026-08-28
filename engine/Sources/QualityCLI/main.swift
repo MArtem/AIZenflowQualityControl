@@ -105,6 +105,28 @@ private func emitStaticEvidence(_ result: StaticEvidenceExecutionResult) -> Neve
     }
 }
 
+private func emitBuildEvidence(_ result: XcodeBuildEvidenceExecutionResult) -> Never {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    if let data = try? encoder.encode(result),
+       data.count <= EvidenceLoader.maximumDocumentBytes + 64 * 1_024,
+       let output = String(data: data, encoding: .utf8) {
+        print(output)
+    } else {
+        print(#"{"command":"build-evidence","evidence":null,"report":{"checks":[{"id":"QC.BUILD_EVIDENCE.OUTPUT_FAILURE","message":"Build evidence output could not be encoded within its bounded envelope.","status":"BLOCKED"}],"command":"build","schemaVersion":1,"status":"BLOCKED"},"schemaVersion":1,"status":"BLOCKED","verification":null}"#)
+        exit(2)
+    }
+
+    switch result.status {
+    case .pass:
+        exit(0)
+    case .fail:
+        exit(1)
+    case .blocked:
+        exit(2)
+    }
+}
+
 private func emitArtifactHashWorkerResponse(
     _ response: EvidenceArtifactHashWorkerResponse,
     exitCode: Int32
@@ -304,18 +326,22 @@ private struct GitCheckoutObservation: Equatable {
 
 private let boundedSubprocessTimeout: TimeInterval = 5
 private let boundedSubprocessOutputBytes = 64 * 1_024
+private let maximumGitIndexBytes = 32 * 1_024 * 1_024
+private let maximumGitIndexRecords = 100_000
 
 private func boundedToolOutput(
     executable: String,
     arguments: [String],
     currentDirectoryURL: URL? = nil,
-    maximumOutputBytes: Int = boundedSubprocessOutputBytes
+    maximumOutputBytes: Int = boundedSubprocessOutputBytes,
+    environment: [String: String]? = nil
 ) -> String? {
     guard let data = boundedToolData(
         executable: executable,
         arguments: arguments,
         currentDirectoryURL: currentDirectoryURL,
-        maximumOutputBytes: maximumOutputBytes
+        maximumOutputBytes: maximumOutputBytes,
+        environment: environment
     ), let output = String(data: data, encoding: .utf8) else {
         return nil
     }
@@ -326,25 +352,30 @@ private func boundedToolData(
     executable: String,
     arguments: [String],
     currentDirectoryURL: URL? = nil,
-    maximumOutputBytes: Int = boundedSubprocessOutputBytes
+    maximumOutputBytes: Int = boundedSubprocessOutputBytes,
+    environment explicitEnvironment: [String: String]? = nil
 ) -> Data? {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
     process.currentDirectoryURL = currentDirectoryURL
-    var environment = ProcessInfo.processInfo.environment
-    for key in [
-        "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_SYSTEM", "GIT_CONFIG_PARAMETERS", "GIT_ATTR_NOSYSTEM"
-    ] {
-        environment.removeValue(forKey: key)
+    if let explicitEnvironment {
+        process.environment = explicitEnvironment
+    } else {
+        var environment = ProcessInfo.processInfo.environment
+        for key in [
+            "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM", "GIT_CONFIG_PARAMETERS", "GIT_ATTR_NOSYSTEM"
+        ] {
+            environment.removeValue(forKey: key)
+        }
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+        process.environment = environment
     }
-    environment["GIT_CONFIG_NOSYSTEM"] = "1"
-    environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
-    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
-    process.environment = environment
 
     guard let result = try? BoundedProcessRunner.run(
         process,
@@ -382,6 +413,7 @@ private func observedGitCheckout(at requestedRoot: URL) -> GitCheckoutObservatio
           ),
           isLowercaseHex(revision, count: 40),
           let origin = rawOriginURL(at: root),
+          gitIndexSupportsExactSHA(at: root),
           boundedToolOutput(
             executable: "/usr/bin/git",
             arguments: ["-C", root.path, "status", "--porcelain=v1", "--untracked-files=all"]
@@ -389,6 +421,35 @@ private func observedGitCheckout(at requestedRoot: URL) -> GitCheckoutObservatio
         return nil
     }
     return GitCheckoutObservation(root: root, revision: revision, origin: origin)
+}
+
+private func gitIndexSupportsExactSHA(at root: URL) -> Bool {
+    guard let taggedData = boundedToolData(
+        executable: "/usr/bin/git",
+        arguments: ["-C", root.path, "ls-files", "-v", "-z"],
+        maximumOutputBytes: maximumGitIndexBytes
+    ), let tagged = String(data: taggedData, encoding: .utf8),
+    let stagedData = boundedToolData(
+        executable: "/usr/bin/git",
+        arguments: ["-C", root.path, "ls-files", "--stage", "-z"],
+        maximumOutputBytes: maximumGitIndexBytes
+    ), let staged = String(data: stagedData, encoding: .utf8) else {
+        return false
+    }
+
+    let taggedRecords = tagged.split(separator: "\0", omittingEmptySubsequences: true)
+    let stagedRecords = staged.split(separator: "\0", omittingEmptySubsequences: true)
+    guard taggedRecords.count <= maximumGitIndexRecords,
+          stagedRecords.count <= maximumGitIndexRecords else {
+        return false
+    }
+    guard taggedRecords.allSatisfy({ record in
+        guard let tag = record.utf8.first else { return false }
+        return !(tag >= 97 && tag <= 122) && tag != 83
+    }) else {
+        return false
+    }
+    return stagedRecords.allSatisfy { !$0.hasPrefix("160000 ") }
 }
 
 private func rawOriginURL(at root: URL) -> String? {
@@ -434,6 +495,199 @@ private func isDescendant(_ url: URL, of root: URL) -> Bool {
     let path = url.resolvingSymlinksInPath().standardizedFileURL.path
     let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
     return path.hasPrefix(rootPath + "/")
+}
+
+private struct BuildEvidenceBoundaryObservation {
+    let source: GitCheckoutObservation
+    let engine: GitCheckoutObservation
+    let context: XcodeBuildEvidenceObservedContext
+}
+
+private func observedToolchain() -> EvidenceToolchain? {
+    let environment = XcodeBuildProcessEnvironment.make()
+    guard let swiftVersion = boundedToolOutput(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swift", "--version"],
+        environment: environment
+    ), let xcodeVersion = boundedToolOutput(
+        executable: "/usr/bin/xcrun",
+        arguments: ["xcodebuild", "-version"],
+        environment: environment
+    ), swiftVersion.unicodeScalars.count <= 1_024,
+    xcodeVersion.unicodeScalars.count <= 1_024 else {
+        return nil
+    }
+    return EvidenceToolchain(swiftVersion: swiftVersion, xcodeVersion: xcodeVersion)
+}
+
+private func trackedProfileSnapshot(
+    at requestedURL: URL,
+    source: GitCheckoutObservation
+) -> ProfileSnapshot? {
+    let standardizedURL = requestedURL.standardizedFileURL
+    let canonicalURL = requestedURL.resolvingSymlinksInPath().standardizedFileURL
+    guard standardizedURL == canonicalURL,
+          isDescendant(canonicalURL, of: source.root) else {
+        return nil
+    }
+    var status = stat()
+    guard lstat(canonicalURL.path, &status) == 0,
+          status.st_mode & S_IFMT == S_IFREG else {
+        return nil
+    }
+    let relativePath = String(canonicalURL.path.dropFirst(source.root.path.count + 1))
+    guard !relativePath.isEmpty,
+          let committedData = boundedToolData(
+            executable: "/usr/bin/git",
+            arguments: ["-C", source.root.path, "show", "\(source.revision):\(relativePath)"],
+            maximumOutputBytes: EvidenceLoader.maximumDocumentBytes
+          ), let workingData = try? boundedFileData(
+            at: canonicalURL,
+            maximumBytes: EvidenceLoader.maximumDocumentBytes
+          ), workingData == committedData else {
+        return nil
+    }
+    return try? ProfileSnapshot(data: committedData)
+}
+
+private func observedBuildEvidenceBoundary(
+    profileURL: URL,
+    sourceRoot: URL,
+    engineRoot: URL,
+    expectedSourceRepository: String,
+    expectedSourceRevision: String,
+    expectedEngineRevision: String,
+    expectedEngineCodeDirectoryHash: String,
+    executionAction: PermissionAction
+) -> BuildEvidenceBoundaryObservation? {
+    guard isLowercaseHex(expectedSourceRevision, count: 40),
+          isLowercaseHex(expectedEngineRevision, count: 40),
+          isLowercaseHex(expectedEngineCodeDirectoryHash, count: 40),
+          ProcessCodeIdentity.currentCodeDirectoryHash() == expectedEngineCodeDirectoryHash,
+          let source = observedGitCheckout(at: sourceRoot),
+          let engine = observedGitCheckout(at: engineRoot),
+          githubRepositoryIdentity(from: source.origin) == expectedSourceRepository,
+          githubRepositoryIdentity(from: engine.origin) == "MArtem/AIZenflowQualityControl",
+          source.revision == expectedSourceRevision,
+          engine.revision == expectedEngineRevision,
+          let profileSnapshot = trackedProfileSnapshot(at: profileURL, source: source),
+          let toolchain = observedToolchain() else {
+        return nil
+    }
+    return BuildEvidenceBoundaryObservation(
+        source: source,
+        engine: engine,
+        context: XcodeBuildEvidenceObservedContext(
+            sourceRepository: expectedSourceRepository,
+            sourceRevision: source.revision,
+            engineVersion: XcodeBuildEvidenceCoordinator.engineVersion,
+            engineRevision: engine.revision,
+            engineCodeDirectoryHash: expectedEngineCodeDirectoryHash,
+            toolchain: toolchain,
+            profileSnapshot: profileSnapshot,
+            executionAction: executionAction,
+            userAuthorizedActions: [executionAction]
+        )
+    )
+}
+
+private func buildBoundariesMatch(
+    _ lhs: BuildEvidenceBoundaryObservation,
+    _ rhs: BuildEvidenceBoundaryObservation
+) -> Bool {
+    lhs.source == rhs.source
+        && lhs.engine == rhs.engine
+        && lhs.context.sourceRepository == rhs.context.sourceRepository
+        && lhs.context.sourceRevision == rhs.context.sourceRevision
+        && lhs.context.engineVersion == rhs.context.engineVersion
+        && lhs.context.engineRevision == rhs.context.engineRevision
+        && lhs.context.engineCodeDirectoryHash == rhs.context.engineCodeDirectoryHash
+        && lhs.context.toolchain == rhs.context.toolchain
+        && lhs.context.profileSnapshot.sha256 == rhs.context.profileSnapshot.sha256
+        && lhs.context.executionAction == rhs.context.executionAction
+        && lhs.context.userAuthorizedActions == rhs.context.userAuthorizedActions
+}
+
+private func buildEvidenceBlocked(_ id: String, _ message: String) -> XcodeBuildEvidenceExecutionResult {
+    XcodeBuildEvidenceExecutionResult(
+        report: QualityReport(
+            command: "build",
+            checks: [QualityCheck(id: id, status: .blocked, message: message)]
+        )
+    )
+}
+
+private func runBuildEvidence(
+    profileURL: URL,
+    sourceRoot: URL,
+    engineRoot: URL,
+    expectedSourceRepository: String,
+    expectedSourceRevision: String,
+    expectedEngineRevision: String,
+    expectedEngineCodeDirectoryHash: String,
+    scheme: String,
+    configuration: String,
+    destination: String,
+    executionContext: String
+) -> XcodeBuildEvidenceExecutionResult {
+    let executionAction: PermissionAction
+    switch executionContext {
+    case "local":
+        executionAction = .localBuildExecution
+    case "github":
+        executionAction = .githubExecution
+    default:
+        return buildEvidenceBlocked(
+            "QC.BUILD_EVIDENCE.INVALID_EXECUTION_CONTEXT",
+            "Execution context must be exactly local or github."
+        )
+    }
+    guard let initial = observedBuildEvidenceBoundary(
+        profileURL: profileURL,
+        sourceRoot: sourceRoot,
+        engineRoot: engineRoot,
+        expectedSourceRepository: expectedSourceRepository,
+        expectedSourceRevision: expectedSourceRevision,
+        expectedEngineRevision: expectedEngineRevision,
+        expectedEngineCodeDirectoryHash: expectedEngineCodeDirectoryHash,
+        executionAction: executionAction
+    ) else {
+        return buildEvidenceBlocked(
+            "QC.BUILD_EVIDENCE.BOUNDARY_UNTRUSTED",
+            "Source, engine, profile, toolchain, or executable identity could not be authenticated."
+        )
+    }
+    let selection = XcodeBuildEvidenceExecution.selection(
+        scheme: scheme,
+        configuration: configuration,
+        destination: destination
+    )
+    return XcodeBuildEvidenceExecution.execute(
+        initialContext: initial.context,
+        selection: selection,
+        runBuild: { profile, selection in
+            try XcodeBuildEvidenceSupervisor.supervise(
+                profile: profile,
+                repositoryRoot: initial.source.root,
+                selection: selection
+            )
+        },
+        observeFinalContext: {
+            guard let final = observedBuildEvidenceBoundary(
+                profileURL: profileURL,
+                sourceRoot: sourceRoot,
+                engineRoot: engineRoot,
+                expectedSourceRepository: expectedSourceRepository,
+                expectedSourceRevision: expectedSourceRevision,
+                expectedEngineRevision: expectedEngineRevision,
+                expectedEngineCodeDirectoryHash: expectedEngineCodeDirectoryHash,
+                executionAction: executionAction
+            ), buildBoundariesMatch(initial, final) else {
+                return nil
+            }
+            return final.context
+        }
+    )
 }
 
 private func staticEvidenceBlocked(_ id: String, _ message: String) -> StaticEvidenceExecutionResult {
@@ -590,7 +844,7 @@ guard arguments.count >= 2 else {
     emit(
         QualityCommands.blockedUsage(
             command: "usage",
-            message: "Expected doctor, validate-profile, validate-evidence-expectation, static, or static-evidence."
+            message: "Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, or build-evidence."
         )
     )
 }
@@ -663,6 +917,41 @@ do {
             )
         } catch {
             emitStaticEvidence(staticEvidenceBlocked("QC.CLI.INVALID_ARGUMENTS", "Static evidence command arguments are invalid."))
+        }
+
+    case "build-evidence":
+        do {
+            let options = try parseOptions(
+                arguments.dropFirst(2),
+                allowed: [
+                    "--profile", "--repository-root", "--engine-repository-root",
+                    "--source-repository", "--expected-source-revision",
+                    "--expected-engine-revision", "--expected-engine-cdhash",
+                    "--scheme", "--configuration", "--destination", "--execution-context"
+                ]
+            )
+            emitBuildEvidence(
+                runBuildEvidence(
+                    profileURL: fileURL(try required("--profile", in: options)),
+                    sourceRoot: fileURL(try required("--repository-root", in: options)),
+                    engineRoot: fileURL(try required("--engine-repository-root", in: options)),
+                    expectedSourceRepository: try required("--source-repository", in: options),
+                    expectedSourceRevision: try required("--expected-source-revision", in: options),
+                    expectedEngineRevision: try required("--expected-engine-revision", in: options),
+                    expectedEngineCodeDirectoryHash: try required("--expected-engine-cdhash", in: options),
+                    scheme: try required("--scheme", in: options),
+                    configuration: try required("--configuration", in: options),
+                    destination: try required("--destination", in: options),
+                    executionContext: try required("--execution-context", in: options)
+                )
+            )
+        } catch {
+            emitBuildEvidence(
+                buildEvidenceBlocked(
+                    "QC.CLI.INVALID_ARGUMENTS",
+                    "Build evidence command arguments are invalid."
+                )
+            )
         }
 
     case "__static-worker":
@@ -752,7 +1041,7 @@ do {
         emit(
             QualityCommands.blockedUsage(
                 command: command,
-                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, static, or static-evidence."
+                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, or build-evidence."
             )
         )
     }

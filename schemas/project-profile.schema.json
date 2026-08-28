@@ -2,7 +2,48 @@
   "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/project-profile.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": 1 } },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "required": ["scheme"],
+        "properties": {
+          "sandbox": { "$ref": "#/$defs/absoluteSandbox" }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["engine"] },
+            { "required": ["xcode"] },
+            { "required": ["applicability"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      },
+      "then": {
+        "required": ["engine", "xcode", "applicability"],
+        "properties": {
+          "sandbox": { "$ref": "#/$defs/portableSandbox" }
+        },
+        "not": { "required": ["scheme"] }
+      }
+    }
+  ],
   "properties": {
+    "applicability": {
+      "items": { "$ref": "#/$defs/capabilityApplicability" },
+      "maxItems": 8,
+      "minItems": 8,
+      "type": "array"
+    },
+    "engine": { "$ref": "#/$defs/enginePin" },
     "mode": {
       "enum": [
         "prototype",
@@ -69,23 +110,10 @@
       "type": "object"
     },
     "sandbox": {
-      "additionalProperties": false,
-      "properties": {
-        "cache": {
-          "$ref": "#/$defs/absolutePath"
-        },
-        "root": {
-          "$ref": "#/$defs/absolutePath"
-        }
-      },
-      "required": [
-        "root",
-        "cache"
-      ],
       "type": "object"
     },
     "schemaVersion": {
-      "const": 1
+      "enum": [1, 2]
     },
     "scheme": {
       "minLength": 1,
@@ -100,12 +128,32 @@
       "minItems": 1,
       "type": "array",
       "uniqueItems": true
+    },
+    "xcode": {
+      "additionalProperties": false,
+      "properties": {
+        "schemes": {
+          "items": { "$ref": "#/$defs/xcodeScheme" },
+          "maxItems": 32,
+          "minItems": 1,
+          "type": "array"
+        },
+        "sourceMembership": {
+          "additionalProperties": false,
+          "properties": {
+            "authority": { "const": "xcode-build-graph" }
+          },
+          "required": ["authority"],
+          "type": "object"
+        }
+      },
+      "required": ["sourceMembership", "schemes"],
+      "type": "object"
     }
   },
   "required": [
     "schemaVersion",
     "project",
-    "scheme",
     "sourcePaths",
     "mode",
     "permissions",
@@ -114,6 +162,57 @@
   "title": "AIZenflow Quality Control Project Profile",
   "type": "object",
   "$defs": {
+    "absoluteSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "cache": { "$ref": "#/$defs/absolutePath" },
+        "root": { "$ref": "#/$defs/absolutePath" }
+      },
+      "required": ["root", "cache"],
+      "type": "object"
+    },
+    "capabilityApplicability": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "enum": [
+            "tests",
+            "snapshotTests",
+            "uiTests",
+            "archiveSigning",
+            "featureFlags",
+            "privacy",
+            "observability",
+            "platformCapabilities"
+          ]
+        },
+        "owner": { "$ref": "#/$defs/nonEmptyString" },
+        "reason": { "$ref": "#/$defs/nonEmptyString" },
+        "revisitCondition": { "$ref": "#/$defs/nonEmptyString" },
+        "status": {
+          "enum": ["applicable", "notApplicable", "deferred"]
+        }
+      },
+      "required": ["capability", "status", "reason", "owner", "revisitCondition"],
+      "type": "object"
+    },
+    "enginePin": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "version": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "required": ["version", "revision"],
+      "type": "object"
+    },
+    "nonEmptyString": {
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
     "absolutePath": {
       "minLength": 1,
       "pattern": "^/",
@@ -124,6 +223,25 @@
         "allow",
         "deny",
         "ask"
+      ]
+    },
+    "portableSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "cache": { "$ref": "#/$defs/portableSandboxPath" },
+        "root": { "$ref": "#/$defs/portableSandboxPath" }
+      },
+      "required": ["root", "cache"],
+      "type": "object"
+    },
+    "portableSandboxPath": {
+      "allOf": [
+        { "$ref": "#/$defs/relativePath" },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.{1,2}(?:/|$)|//|/$"
+          }
+        }
       ]
     },
     "relativePath": {
@@ -139,6 +257,30 @@
           }
         }
       ]
+    },
+    "stringSelection": {
+      "items": { "$ref": "#/$defs/nonEmptyString" },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "xcodeScheme": {
+      "additionalProperties": false,
+      "properties": {
+        "configurations": { "$ref": "#/$defs/stringSelection" },
+        "destinations": { "$ref": "#/$defs/stringSelection" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "targets": { "$ref": "#/$defs/stringSelection" },
+        "testPlans": {
+          "items": { "$ref": "#/$defs/relativePath" },
+          "maxItems": 64,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": ["name", "targets", "configurations", "destinations", "testPlans"],
+      "type": "object"
     }
   }
 }
