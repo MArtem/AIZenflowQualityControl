@@ -94,6 +94,7 @@ swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
 quality mode-plan --profile <profile.json> --mode <static|build|build-and-tests|full>
+quality mode-execute --profile <profile.json> --mode <static|build|build-and-tests|full> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> [--scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>]
 quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex>
 quality build-evidence --profile <profile.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> --scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>
 quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expectation <trusted-expectation.json>
@@ -110,8 +111,13 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
   root and rejects symbolic-link escape before Xcode graph discovery.
 - `mode-plan` expands one user-selected manual mode into stable, permission-aware steps. It is a
   pre-execution plan only; `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` are never runtime
-  PASS evidence. The plan currently delegates execution to the existing static/build boundaries;
-  permitted test and full-mode execution remain staged work.
+  PASS evidence.
+- `mode-execute` runs the existing authenticated `static-evidence` boundary and, for modes beyond
+  `static`, the authenticated `build-evidence` boundary in order. A failed or blocked prerequisite
+  skips later steps. Tests, UI tests, archive/signing, feature-flag, and privacy steps are emitted
+  as explicit `NOT_RUN_BY_USER_DECISION`, `NOT_APPLICABLE`, or `BLOCKED` until their dedicated
+  evidence boundaries exist. Child evidence remains attached to each step; the mode envelope never
+  infers composite evidence or a trusted expectation.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
   checks from explicit profile and policy inputs.
 - `static-evidence` scans the asserted Git-tree manifest directly; it never scans mutable
@@ -139,7 +145,9 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
   result with its verified evidence preserved for diagnosis. The command does not infer expected
   commands, permissions, gates, or identities from the receipts.
 
-Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
+Every command emits structured JSON. Execution boundaries use `PASS`, `FAIL`, or `BLOCKED`; manual
+mode orchestration additionally reports `NOT_APPLICABLE`, `NOT_RUN_BY_USER_DECISION`, and `SKIPPED`.
+Malformed,
 unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.
 The public result contract is `schemas/build-evidence-result.schema.json`; only its `PASS` branch
 permits non-null evidence and verification.

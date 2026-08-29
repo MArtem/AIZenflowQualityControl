@@ -168,6 +168,211 @@ private func emitModePlan(_ plan: QualityModePlan) -> Never {
     }
 }
 
+private func emitModeExecution(_ result: QualityModeExecutionResult) -> Never {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    if let data = try? encoder.encode(result),
+       data.count <= EvidenceLoader.maximumDocumentBytes + 128 * 1_024,
+       let output = String(data: data, encoding: .utf8) {
+        print(output)
+    } else {
+        print(#"{"command":"mode-execute","mode":"static","schemaVersion":1,"status":"BLOCKED","steps":[{"command":"mode-execute","evidence":null,"id":"QC.MODE.EXECUTION.OUTPUT_FAILURE","message":"Mode execution output could not be encoded within its bounded envelope.","report":null,"status":"BLOCKED","verification":null}]}"#)
+        exit(2)
+    }
+
+    switch result.status {
+    case .pass, .notApplicable:
+        exit(0)
+    case .fail, .notRunByUserDecision, .skipped:
+        exit(1)
+    case .blocked:
+        exit(2)
+    }
+}
+
+private func modeExecutionBlocked(
+    mode: QualityMode,
+    id: String,
+    message: String
+) -> QualityModeExecutionResult {
+    QualityModeExecutionResult(
+        mode: mode,
+        steps: [QualityModeExecutionStep(
+            id: id,
+            command: "mode-execute",
+            status: .blocked,
+            message: message
+        )]
+    )
+}
+
+private func staticModeExecutionStep(_ result: StaticEvidenceExecutionResult) -> QualityModeExecutionStep {
+    let status: GateStatus
+    switch result.status {
+    case .pass: status = .pass
+    case .fail: status = .fail
+    case .blocked: status = .blocked
+    }
+    return QualityModeExecutionStep(
+        id: "QC.MODE.STATIC",
+        command: result.command,
+        status: status,
+        message: result.report.checks.first?.message ?? "Static evidence boundary completed.",
+        report: result.report,
+        evidence: result.evidence,
+        verification: result.verification
+    )
+}
+
+private func buildModeExecutionStep(_ result: XcodeBuildEvidenceExecutionResult) -> QualityModeExecutionStep {
+    let status: GateStatus
+    switch result.status {
+    case .pass: status = .pass
+    case .fail: status = .fail
+    case .blocked: status = .blocked
+    }
+    return QualityModeExecutionStep(
+        id: "QC.MODE.BUILD",
+        command: result.command,
+        status: status,
+        message: result.report.checks.first?.message ?? "Build evidence boundary completed.",
+        report: result.report,
+        evidence: result.evidence,
+        verification: result.verification
+    )
+}
+
+private func skippedModeStep(_ step: QualityModeStep, reason: String) -> QualityModeExecutionStep {
+    QualityModeExecutionStep(
+        id: step.id,
+        command: step.command,
+        status: .skipped,
+        message: reason
+    )
+}
+
+private func plannedModeStep(
+    _ step: QualityModeStep,
+    profile: ProjectProfile
+) -> QualityModeExecutionStep {
+    if step.status == .notApplicable {
+        return QualityModeExecutionStep(
+            id: step.id,
+            command: step.command,
+            status: .notApplicable,
+            message: step.remediation
+        )
+    }
+    if let action = step.action,
+       PermissionEvaluator.requirement(for: action, policy: profile.permissions) == .prohibited {
+        return QualityModeExecutionStep(
+            id: step.id,
+            command: step.command,
+            status: .blocked,
+            message: "The profile prohibits this action; no execution was attempted."
+        )
+    }
+    switch step.status {
+    case .blocked:
+        return QualityModeExecutionStep(
+            id: step.id,
+            command: step.command,
+            status: .blocked,
+            message: step.remediation
+        )
+    case .skipped:
+        return QualityModeExecutionStep(
+            id: step.id,
+            command: step.command,
+            status: .skipped,
+            message: step.remediation
+        )
+    case .notRunByUserDecision:
+        return QualityModeExecutionStep(
+            id: step.id,
+            command: step.command,
+            status: .notRunByUserDecision,
+            message: step.remediation
+        )
+    case .pass, .fail, .notApplicable:
+        return QualityModeExecutionStep(
+            id: step.id,
+            command: step.command,
+            status: step.status,
+            message: step.remediation
+        )
+    }
+}
+
+private func executeQualityMode(
+    mode: QualityMode,
+    profileURL: URL,
+    options: [String: String]
+) -> QualityModeExecutionResult {
+    let plan = QualityCommands.modePlan(at: profileURL, mode: mode)
+    guard plan.status != .blocked else {
+        return modeExecutionBlocked(
+            mode: mode,
+            id: "QC.MODE.EXECUTION.PROFILE_BLOCKED",
+            message: "The selected profile cannot produce a trustworthy mode execution plan."
+        )
+    }
+    guard let profile = try? ProfileLoader.load(from: profileURL) else {
+        return modeExecutionBlocked(
+            mode: mode,
+            id: "QC.MODE.EXECUTION.PROFILE_UNREADABLE",
+            message: "The selected profile could not be loaded through the bounded profile boundary."
+        )
+    }
+
+    let staticResult = runStaticEvidence(
+        profileURL: profileURL,
+        policyURL: fileURL(options["--policy"] ?? ""),
+        sourceRoot: fileURL(options["--repository-root"] ?? ""),
+        engineRoot: fileURL(options["--engine-repository-root"] ?? ""),
+        snapshotRoot: fileURL(options["--snapshot-root"] ?? ""),
+        expectedSourceRepository: options["--source-repository"] ?? "",
+        expectedSourceRevision: options["--expected-source-revision"] ?? "",
+        expectedEngineRevision: options["--expected-engine-revision"] ?? "",
+        expectedEngineCodeDirectoryHash: options["--expected-engine-cdhash"] ?? ""
+    )
+    var steps = [staticModeExecutionStep(staticResult)]
+    guard mode != .static else {
+        return QualityModeExecutionResult(mode: mode, steps: steps)
+    }
+    guard staticResult.status == .pass else {
+        for step in plan.steps.dropFirst() {
+            steps.append(skippedModeStep(step, reason: "Skipped because the static evidence boundary did not PASS."))
+        }
+        return QualityModeExecutionResult(mode: mode, steps: steps)
+    }
+
+    let buildResult = runBuildEvidence(
+        profileURL: profileURL,
+        sourceRoot: fileURL(options["--repository-root"] ?? ""),
+        engineRoot: fileURL(options["--engine-repository-root"] ?? ""),
+        expectedSourceRepository: options["--source-repository"] ?? "",
+        expectedSourceRevision: options["--expected-source-revision"] ?? "",
+        expectedEngineRevision: options["--expected-engine-revision"] ?? "",
+        expectedEngineCodeDirectoryHash: options["--expected-engine-cdhash"] ?? "",
+        scheme: options["--scheme"] ?? profile.scheme ?? "",
+        configuration: options["--configuration"] ?? "",
+        destination: options["--destination"] ?? "",
+        executionContext: options["--execution-context"] ?? ""
+    )
+    steps.append(buildModeExecutionStep(buildResult))
+    guard buildResult.status == .pass else {
+        for step in plan.steps.dropFirst(2) {
+            steps.append(skippedModeStep(step, reason: "Skipped because the build evidence boundary did not PASS."))
+        }
+        return QualityModeExecutionResult(mode: mode, steps: steps)
+    }
+    for step in plan.steps.dropFirst(2) {
+        steps.append(plannedModeStep(step, profile: profile))
+    }
+    return QualityModeExecutionResult(mode: mode, steps: steps)
+}
+
 private func evidenceURLs(from value: String) throws -> [URL] {
     let paths = value.split(separator: ",", omittingEmptySubsequences: false).map {
         String($0).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -898,7 +1103,7 @@ guard arguments.count >= 2 else {
     emit(
         QualityCommands.blockedUsage(
             command: "usage",
-            message: "Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, static, static-evidence, build-evidence, or aggregate-evidence."
+            message: "Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, mode-execute, static, static-evidence, build-evidence, or aggregate-evidence."
         )
     )
 }
@@ -931,6 +1136,51 @@ do {
             ))
         }
         emitModePlan(QualityCommands.modePlan(at: fileURL(profile), mode: mode))
+
+    case "mode-execute":
+        do {
+            let options = try parseOptions(
+                arguments.dropFirst(2),
+                allowed: [
+                    "--profile", "--mode", "--policy", "--repository-root", "--engine-repository-root",
+                    "--snapshot-root", "--source-repository", "--expected-source-revision",
+                    "--expected-engine-revision", "--expected-engine-cdhash", "--scheme",
+                    "--configuration", "--destination", "--execution-context"
+                ]
+            )
+            let profileURL = fileURL(try required("--profile", in: options))
+            let modeValue = try required("--mode", in: options)
+            guard let mode = QualityMode(rawValue: modeValue) else {
+                emitModeExecution(modeExecutionBlocked(
+                    mode: .static,
+                    id: "QC.CLI.INVALID_MODE",
+                    message: "Mode must be static, build, build-and-tests, or full."
+                ))
+            }
+            let requiredStaticOptions = [
+                "--policy", "--repository-root", "--engine-repository-root", "--snapshot-root",
+                "--source-repository", "--expected-source-revision", "--expected-engine-revision",
+                "--expected-engine-cdhash"
+            ]
+            for key in requiredStaticOptions {
+                _ = try required(key, in: options)
+            }
+            if mode != .static {
+                for key in ["--configuration", "--destination", "--execution-context"] {
+                    _ = try required(key, in: options)
+                }
+            }
+            emitModeExecution(executeQualityMode(mode: mode, profileURL: profileURL, options: options))
+        } catch let error as CLIError {
+            switch error {
+            case let .message(message):
+                emitModeExecution(modeExecutionBlocked(
+                    mode: .static,
+                    id: "QC.CLI.INVALID_ARGUMENTS",
+                    message: message
+                ))
+            }
+        }
 
     case "doctor":
         let options = try parseOptions(

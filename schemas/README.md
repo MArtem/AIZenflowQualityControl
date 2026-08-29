@@ -59,3 +59,10 @@ remain evidence-free `BLOCKED`.
 IDs while preserving applicability and permission status. A mode plan is not runtime evidence:
 `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` never become `PASS`; the actual execution
 boundaries must produce separately authenticated evidence.
+
+`mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
+It preserves each child boundary report, evidence, and verification result in execution order.
+The envelope never infers a composite evidence claim; callers needing one must supply an explicit
+trusted expectation to `quality aggregate-evidence`. Missing test, UI, archive/signing,
+feature-flag, or privacy boundaries remain explicit `NOT_RUN_BY_USER_DECISION`,
+`NOT_APPLICABLE`, or `BLOCKED` steps.
