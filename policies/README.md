@@ -9,4 +9,5 @@ write or execute tests.
 checks. `check-catalog.schema.json` closes the transport shape. Each entry records scope, severity,
 applicability, remediation, and positive/negative fixture references. `implemented`, `staged`, and
 `review-candidate` distinguish current engine behavior from planned adapters; catalog presence never
-claims that a staged check already runs.
+claims that a staged check already runs. Placeholder fixture references for staged checks are
+catalog commitments, not existing evidence, until their adapters and fixtures are added.
