@@ -401,7 +401,12 @@ package enum XcodeBuildEvidenceSupervisor {
     }
 
     private static func sanitizedEnvironment(temporaryDirectory: URL) -> [String: String] {
-        XcodeBuildProcessEnvironment.make(temporaryDirectory: temporaryDirectory)
+        let path = temporaryDirectory.path.hasSuffix("/")
+            ? temporaryDirectory.path
+            : temporaryDirectory.path + "/"
+        return XcodeBuildProcessEnvironment.make(
+            temporaryDirectory: URL(fileURLWithPath: path, isDirectory: true)
+        )
     }
 
     private static func prepareLayout(
