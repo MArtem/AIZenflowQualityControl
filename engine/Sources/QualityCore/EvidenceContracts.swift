@@ -408,6 +408,40 @@ public enum EvidenceLoader {
     }
 }
 
+/// Loads one public static/build execution receipt and extracts its nested evidence.
+///
+/// The receipt envelope is untrusted transport. Duplicate keys and oversized input are rejected
+/// before extracting the nested object, which is then decoded by the strict `EvidenceLoader`.
+public enum EvidenceReceiptLoader {
+    public static let maximumDocumentBytes = EvidenceLoader.maximumDocumentBytes + 64 * 1_024
+
+    public static func load(from url: URL) throws -> QualityEvidence {
+        try decode(
+            JSONDocumentConstraints.loadData(
+                from: url,
+                maximumBytes: maximumDocumentBytes
+            )
+        )
+    }
+
+    public static func decode(_ data: Data) throws -> QualityEvidence {
+        guard data.count <= maximumDocumentBytes else {
+            throw EvidenceDocumentLimitError()
+        }
+        try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys).isSubset(of: [
+                  "command", "evidence", "report", "schemaVersion", "status", "verification"
+              ]),
+              let nestedEvidence = object["evidence"] as? [String: Any] else {
+            throw EvidenceDocumentLimitError()
+        }
+        return try EvidenceLoader.decode(
+            JSONSerialization.data(withJSONObject: nestedEvidence, options: [.sortedKeys])
+        )
+    }
+}
+
 private struct EvidenceDocument: Decodable {
     let schemaVersion: Int
     let sourceRepository: String
@@ -561,7 +595,7 @@ private struct StrictEvidencePermissionPolicy: Decodable {
     }
 }
 
-public struct EvidenceCommandExpectation: Equatable, Sendable {
+public struct EvidenceCommandExpectation: Codable, Equatable, Sendable {
     public let commandSHA256: String
     public let exitCode: Int
     public let actions: Set<PermissionAction>
@@ -575,9 +609,26 @@ public struct EvidenceCommandExpectation: Equatable, Sendable {
         self.exitCode = exitCode
         self.actions = actions
     }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case commandSHA256
+        case exitCode
+        case actions
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue))
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        commandSHA256 = try container.decode(String.self, forKey: .commandSHA256)
+        exitCode = try container.decode(Int.self, forKey: .exitCode)
+        actions = try container.decode(Set<PermissionAction>.self, forKey: .actions)
+    }
 }
 
-public struct EvidenceGateExpectation: Equatable, Sendable {
+public struct EvidenceGateExpectation: Codable, Equatable, Sendable {
     public let commandID: String?
     public let actions: Set<PermissionAction>
     public let status: GateStatus
@@ -594,9 +645,33 @@ public struct EvidenceGateExpectation: Equatable, Sendable {
         self.status = status
         self.message = message
     }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case commandID
+        case actions
+        case status
+        case message
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue))
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.commandID) {
+            try rejectNullEvidenceValue(in: container, forKey: .commandID)
+            commandID = try container.decode(String.self, forKey: .commandID)
+        } else {
+            commandID = nil
+        }
+        actions = try container.decode(Set<PermissionAction>.self, forKey: .actions)
+        status = try container.decode(GateStatus.self, forKey: .status)
+        message = try container.decode(String.self, forKey: .message)
+    }
 }
 
-public struct EvidenceExpectation: Sendable {
+public struct EvidenceExpectation: Codable, Sendable {
     public let sourceRepository: String
     public let sourceRevision: String
     public let engineVersion: String
@@ -648,6 +723,181 @@ public struct EvidenceExpectation: Sendable {
         self.reviewRevision = reviewRevision
         self.artifactSHA256ByPath = artifactSHA256ByPath
         self.residualRisks = residualRisks
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case sourceRepository
+        case sourceRevision
+        case engineVersion
+        case engineRevision
+        case profileSchemaVersion
+        case profileSHA256
+        case toolchain
+        case permissions
+        case commandsByID
+        case gatesByID
+        case userAuthorizedActions
+        case testCounts
+        case testGateID
+        case reviewRevision
+        case artifactSHA256ByPath
+        case residualRisks
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue))
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceRepository = try container.decode(String.self, forKey: .sourceRepository)
+        sourceRevision = try container.decode(String.self, forKey: .sourceRevision)
+        engineVersion = try container.decode(String.self, forKey: .engineVersion)
+        engineRevision = try container.decode(String.self, forKey: .engineRevision)
+        profileSchemaVersion = try container.decode(Int.self, forKey: .profileSchemaVersion)
+        profileSHA256 = try container.decode(String.self, forKey: .profileSHA256)
+        toolchain = try container.decode(EvidenceToolchain.self, forKey: .toolchain)
+        permissions = try container.decode(PermissionPolicy.self, forKey: .permissions)
+        commandsByID = try container.decode([String: EvidenceCommandExpectation].self, forKey: .commandsByID)
+        gatesByID = try container.decode([String: EvidenceGateExpectation].self, forKey: .gatesByID)
+        userAuthorizedActions = try container.decode(Set<PermissionAction>.self, forKey: .userAuthorizedActions)
+        if container.contains(.testCounts) {
+            try rejectNullEvidenceValue(in: container, forKey: .testCounts)
+            testCounts = try container.decode(EvidenceTestCounts.self, forKey: .testCounts)
+        } else {
+            testCounts = nil
+        }
+        if container.contains(.testGateID) {
+            try rejectNullEvidenceValue(in: container, forKey: .testGateID)
+            testGateID = try container.decode(String.self, forKey: .testGateID)
+        } else {
+            testGateID = nil
+        }
+        if container.contains(.reviewRevision) {
+            try rejectNullEvidenceValue(in: container, forKey: .reviewRevision)
+            reviewRevision = try container.decode(String.self, forKey: .reviewRevision)
+        } else {
+            reviewRevision = nil
+        }
+        artifactSHA256ByPath = try container.decode([String: String].self, forKey: .artifactSHA256ByPath)
+        residualRisks = try container.decode(Set<String>.self, forKey: .residualRisks)
+    }
+}
+
+/// Loads the complete caller-owned expectation needed to aggregate evidence.
+///
+/// Unlike `EvidenceExpectationDocumentLoader`, this loader is intentionally explicit about the
+/// authority boundary: the caller supplies every expected identity, command, gate, permission,
+/// and artifact fact. The file grants no authority by itself; it is only consumed as the expected
+/// side of `EvidenceVerifier`.
+public enum TrustedEvidenceExpectationLoader {
+    public static let maximumDocumentBytes = EvidenceLoader.maximumDocumentBytes
+
+    public static func load(from url: URL) throws -> EvidenceExpectation {
+        try decode(
+            JSONDocumentConstraints.loadData(
+                from: url,
+                maximumBytes: maximumDocumentBytes
+            )
+        )
+    }
+
+    public static func decode(_ data: Data) throws -> EvidenceExpectation {
+        guard data.count <= maximumDocumentBytes else {
+            throw EvidenceDocumentLimitError()
+        }
+        try JSONDocumentConstraints.rejectDuplicateObjectKeys(in: data)
+        return try JSONDecoder().decode(EvidenceExpectation.self, from: data)
+    }
+}
+
+public struct EvidenceAggregationExecutionResult: Encodable, Sendable {
+    public let schemaVersion: Int
+    public let command: String
+    public let status: QualityStatus
+    public let report: QualityReport
+    public let evidence: QualityEvidence?
+    public let verification: EvidenceVerification?
+
+    fileprivate init(aggregation: EvidenceAggregationResult) {
+        let verification = aggregation.verification
+        let checkStatus: QualityStatus
+        let message: String
+        if let issue = verification.issues.first {
+            checkStatus = .blocked
+            message = "\(issue.code): \(issue.message)"
+        } else {
+            switch verification.verdict {
+            case .ready:
+                checkStatus = .pass
+                message = "Aggregated evidence is verified and ready."
+            case .notReady:
+                checkStatus = .fail
+                message = "Aggregated evidence contains a failing gate."
+            case .readyWithAcceptedRisk, .needsOwnerDecision, .blocked, .bypassed:
+                checkStatus = .blocked
+                message = "Aggregated evidence does not establish a normal PASS verdict."
+            }
+        }
+        let report = QualityReport(
+            command: "aggregate-evidence",
+            checks: [QualityCheck(
+                id: "QC.EVIDENCE.AGGREGATION",
+                status: checkStatus,
+                message: message
+            )]
+        )
+        schemaVersion = 1
+        command = "aggregate-evidence"
+        status = report.status
+        self.report = report
+        evidence = aggregation.evidence
+        self.verification = verification
+    }
+
+    public init(blockedID: String, message: String) {
+        schemaVersion = 1
+        command = "aggregate-evidence"
+        report = QualityReport(
+            command: "aggregate-evidence",
+            checks: [QualityCheck(id: blockedID, status: .blocked, message: message)]
+        )
+        status = report.status
+        evidence = nil
+        verification = nil
+    }
+}
+
+public enum EvidenceAggregationCommands {
+    public static func execute(
+        evidenceURLs: [URL],
+        expectationURL: URL
+    ) -> EvidenceAggregationExecutionResult {
+        guard !evidenceURLs.isEmpty else {
+            return EvidenceAggregationExecutionResult(
+                blockedID: "QC.EVIDENCE.AGGREGATION.EMPTY_INPUTS",
+                message: "Evidence aggregation requires at least one receipt path."
+            )
+        }
+        guard evidenceURLs.count <= 64,
+              Set(evidenceURLs.map(\.standardizedFileURL.path)).count == evidenceURLs.count else {
+            return EvidenceAggregationExecutionResult(
+                blockedID: "QC.EVIDENCE.AGGREGATION.INPUT_LIMIT",
+                message: "Evidence receipt paths must be unique and contain at most 64 items."
+            )
+        }
+        do {
+            let expected = try TrustedEvidenceExpectationLoader.load(from: expectationURL)
+            let evidences = try evidenceURLs.map { try EvidenceReceiptLoader.load(from: $0) }
+            return EvidenceAggregationExecutionResult(
+                aggregation: EvidenceVerifier.aggregate(evidences, expected: expected)
+            )
+        } catch {
+            return EvidenceAggregationExecutionResult(
+                blockedID: "QC.EVIDENCE.AGGREGATION.INPUT_UNREADABLE",
+                message: "Evidence receipt or trusted expectation could not be read or decoded."
+            )
+        }
     }
 }
 

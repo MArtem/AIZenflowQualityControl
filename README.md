@@ -95,6 +95,7 @@ swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
 quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex>
 quality build-evidence --profile <profile.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> --scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>
+quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expectation <trusted-expectation.json>
 ```
 
 - `validate-profile` decodes profile schema versions 1 and 2. Version 1 preserves absolute sandbox
@@ -126,6 +127,12 @@ quality build-evidence --profile <profile.json> --repository-root <source-reposi
   The command invocation is only the engine's action-authorization input: it cannot authenticate a
   human operator, so agents and automation must still obtain the separate approval required by the
   governing reusable rules before invoking it.
+- `aggregate-evidence` loads bounded, untrusted evidence receipts and a complete caller-owned
+  expectation from `schemas/trusted-evidence-expectation.schema.json`, then joins them only through
+  `EvidenceVerifier.aggregate`. Empty, duplicate, oversized, malformed, identity-mismatched, or
+  unverifiable inputs produce evidence-free `BLOCKED`; a valid failing gate produces a non-PASS
+  result with its verified evidence preserved for diagnosis. The command does not infer expected
+  commands, permissions, gates, or identities from the receipts.
 
 Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
 unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.

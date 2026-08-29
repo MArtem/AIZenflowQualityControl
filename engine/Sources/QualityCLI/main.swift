@@ -127,6 +127,41 @@ private func emitBuildEvidence(_ result: XcodeBuildEvidenceExecutionResult) -> N
     }
 }
 
+private func emitAggregateEvidence(_ result: EvidenceAggregationExecutionResult) -> Never {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    if let data = try? encoder.encode(result),
+       data.count <= EvidenceLoader.maximumDocumentBytes + 64 * 1_024,
+       let output = String(data: data, encoding: .utf8) {
+        print(output)
+    } else {
+        print(#"{"command":"aggregate-evidence","evidence":null,"report":{"checks":[{"id":"QC.EVIDENCE.AGGREGATION.OUTPUT_FAILURE","message":"Aggregated evidence output could not be encoded within its bounded envelope.","status":"BLOCKED"}],"command":"aggregate-evidence","schemaVersion":1,"status":"BLOCKED"},"schemaVersion":1,"status":"BLOCKED","verification":null}"#)
+        exit(2)
+    }
+
+    switch result.status {
+    case .pass:
+        exit(0)
+    case .fail:
+        exit(1)
+    case .blocked:
+        exit(2)
+    }
+}
+
+private func evidenceURLs(from value: String) throws -> [URL] {
+    let paths = value.split(separator: ",", omittingEmptySubsequences: false).map {
+        String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    guard !paths.isEmpty,
+          paths.allSatisfy({ !$0.isEmpty }),
+          paths.count <= 64,
+          Set(paths).count == paths.count else {
+        throw CLIError.message("Evidence paths must be unique, non-empty, and contain at most 64 items.")
+    }
+    return paths.map(fileURL)
+}
+
 private func emitArtifactHashWorkerResponse(
     _ response: EvidenceArtifactHashWorkerResponse,
     exitCode: Int32
@@ -844,7 +879,7 @@ guard arguments.count >= 2 else {
     emit(
         QualityCommands.blockedUsage(
             command: "usage",
-            message: "Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, or build-evidence."
+            message: "Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, build-evidence, or aggregate-evidence."
         )
     )
 }
@@ -954,6 +989,30 @@ do {
             )
         }
 
+    case "aggregate-evidence":
+        do {
+            let options = try parseOptions(
+                arguments.dropFirst(2),
+                allowed: ["--evidence", "--expectation"]
+            )
+            emitAggregateEvidence(
+                EvidenceAggregationCommands.execute(
+                    evidenceURLs: try evidenceURLs(from: required("--evidence", in: options)),
+                    expectationURL: fileURL(try required("--expectation", in: options))
+                )
+            )
+        } catch let error as CLIError {
+            switch error {
+            case let .message(message):
+                emitAggregateEvidence(
+                    EvidenceAggregationExecutionResult(
+                        blockedID: "QC.CLI.INVALID_ARGUMENTS",
+                        message: message
+                    )
+                )
+            }
+        }
+
     case "__static-worker":
         guard ProcessInfo.processInfo.environment[staticWorkerEnvironmentKey] == "1",
               let parentProcessIdentifier = trustedParentProcessIdentifier() else {
@@ -1041,7 +1100,7 @@ do {
         emit(
             QualityCommands.blockedUsage(
                 command: command,
-                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, or build-evidence."
+                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, build-evidence, or aggregate-evidence."
             )
         )
     }

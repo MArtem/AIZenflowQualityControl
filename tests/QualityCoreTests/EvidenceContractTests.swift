@@ -143,6 +143,38 @@ struct EvidenceContractTests {
         #expect(oversized.verification.issues.map(\.code).contains("QC.EVIDENCE.AGGREGATION_LIMIT"))
     }
 
+    @Test("Trusted aggregate expectations round-trip through a strict loader")
+    func trustedExpectationRoundTrip() throws {
+        let encoded = try JSONEncoder().encode(expectation())
+        let decoded = try TrustedEvidenceExpectationLoader.decode(encoded)
+
+        #expect(decoded.sourceRepository == "MArtem/AIZenflowQualityControl")
+        #expect(decoded.commandsByID["static"]?.commandSHA256 == staticCommandHash)
+        #expect(decoded.gatesByID["QC.STATIC"]?.status == .pass)
+
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object["unexpected"] = true
+        let invalid = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        #expect(throws: DecodingError.self) {
+            try TrustedEvidenceExpectationLoader.decode(invalid)
+        }
+    }
+
+    @Test("Aggregate execution blocks an empty receipt list")
+    func aggregateExecutionRequiresReceipts() {
+        let result = EvidenceAggregationCommands.execute(
+            evidenceURLs: [],
+            expectationURL: URL(fileURLWithPath: "/does/not/exist.json")
+        )
+
+        #expect(result.status == .blocked)
+        #expect(result.report.checks.first?.id == "QC.EVIDENCE.AGGREGATION.EMPTY_INPUTS")
+        #expect(result.evidence == nil)
+        #expect(result.verification == nil)
+    }
+
     @Test("Unsupported profile schema versions are BYPASSED")
     func unsupportedProfileSchemaVersionIsBypassed() {
         let result = EvidenceVerifier.verify(
@@ -1033,6 +1065,32 @@ struct EvidenceContractTests {
         #expect(decoded.claimedVerdict == .ready)
         #expect(command["commandLine"] == nil)
         #expect(command["commandSHA256"] as? String == staticCommandHash)
+    }
+
+    @Test("Public execution receipts decode only their nested evidence")
+    func evidenceReceiptRoundTrip() throws {
+        let evidenceData = try JSONEncoder().encode(validEvidence())
+        let evidenceObject = try #require(
+            try JSONSerialization.jsonObject(with: evidenceData) as? [String: Any]
+        )
+        let receipt: [String: Any] = [
+            "command": "static-evidence",
+            "evidence": evidenceObject,
+            "report": [
+                "command": "static",
+                "schemaVersion": 1,
+                "status": "PASS",
+                "checks": []
+            ],
+            "schemaVersion": 1,
+            "status": "PASS",
+            "verification": ["verdict": "READY", "issues": []]
+        ]
+        let receiptData = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+        let decoded = try EvidenceReceiptLoader.decode(receiptData)
+
+        #expect(decoded.sourceRevision == sourceRevision)
+        #expect(decoded.claimedVerdict == .ready)
     }
 
     @Test("Evidence loader rejects schema-invalid properties, null optionals, and duplicate keys")

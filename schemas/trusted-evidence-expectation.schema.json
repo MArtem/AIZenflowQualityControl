@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/trusted-evidence-expectation.schema.json",
+  "title": "AIZenflow Caller-Owned Trusted Evidence Expectation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sourceRepository", "sourceRevision", "engineVersion", "engineRevision",
+    "profileSchemaVersion", "profileSHA256", "toolchain", "permissions",
+    "commandsByID", "gatesByID", "userAuthorizedActions", "artifactSHA256ByPath",
+    "residualRisks"
+  ],
+  "properties": {
+    "sourceRepository": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
+    "sourceRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
+    "engineVersion": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
+    "engineRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
+    "profileSchemaVersion": { "enum": [1, 2] },
+    "profileSHA256": { "$ref": "quality-evidence.schema.json#/$defs/sha256" },
+    "toolchain": { "$ref": "quality-evidence.schema.json#/properties/toolchain" },
+    "permissions": { "$ref": "quality-evidence.schema.json#/properties/permissions" },
+    "commandsByID": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": { "$ref": "#/$defs/commandExpectation" }
+    },
+    "gatesByID": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": { "$ref": "#/$defs/gateExpectation" }
+    },
+    "userAuthorizedActions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "quality-evidence.schema.json#/$defs/permissionAction" }
+    },
+    "testCounts": { "$ref": "quality-evidence.schema.json#/properties/testCounts" },
+    "testGateID": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
+    "reviewRevision": { "$ref": "quality-evidence.schema.json#/$defs/gitRevision" },
+    "artifactSHA256ByPath": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": { "$ref": "quality-evidence.schema.json#/$defs/sha256" }
+    },
+    "residualRisks": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" }
+    }
+  },
+  "$defs": {
+    "commandExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commandSHA256", "exitCode", "actions"],
+      "properties": {
+        "commandSHA256": { "$ref": "quality-evidence.schema.json#/$defs/sha256" },
+        "exitCode": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "actions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "quality-evidence.schema.json#/$defs/permissionAction" }
+        }
+      }
+    },
+    "gateExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions", "status", "message"],
+      "properties": {
+        "commandID": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" },
+        "actions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "quality-evidence.schema.json#/$defs/permissionAction" }
+        },
+        "status": { "enum": ["PASS", "FAIL", "BLOCKED", "NOT_APPLICABLE", "NOT_RUN_BY_USER_DECISION", "SKIPPED"] },
+        "message": { "$ref": "quality-evidence.schema.json#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}
