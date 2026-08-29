@@ -404,9 +404,9 @@ package enum XcodeBuildEvidenceSupervisor {
         let path = temporaryDirectory.path.hasSuffix("/")
             ? temporaryDirectory.path
             : temporaryDirectory.path + "/"
-        return XcodeBuildProcessEnvironment.make(
-            temporaryDirectory: URL(fileURLWithPath: path, isDirectory: true)
-        )
+        var environment = XcodeBuildProcessEnvironment.make()
+        environment["TMPDIR"] = path
+        return environment
     }
 
     private static func prepareLayout(
