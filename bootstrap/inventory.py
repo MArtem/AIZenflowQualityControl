@@ -20,6 +20,7 @@ from typing import Any
 MAX_PLAN_BYTES = 1_000_000
 MAX_ENTRIES = 256
 MAX_STRING_LENGTH = 1_024
+MAX_FILE_BYTES = 5_000_000
 ALLOWED_KINDS = {"exact", "overlay"}
 APPLY_AUTHORIZATION = "APPLY"
 ROLLBACK_AUTHORIZATION = "ROLLBACK"
@@ -78,6 +79,11 @@ def contained(root: Path, relative: str) -> Path:
 
 
 def digest(path: Path) -> str:
+    try:
+        if path.stat().st_size > MAX_FILE_BYTES:
+            raise PlanError("file exceeds the immutable byte limit")
+    except OSError:
+        raise
     hasher = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(64 * 1024), b""):
