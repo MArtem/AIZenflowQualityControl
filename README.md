@@ -93,6 +93,7 @@ swift run quality validate-profile --profile <profile.json>
 swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
+quality mode-plan --profile <profile.json> --mode <static|build|build-and-tests|full>
 quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex>
 quality build-evidence --profile <profile.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> --scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>
 quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expectation <trusted-expectation.json>
@@ -107,6 +108,10 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
 - `doctor` verifies configured repository, project/workspace, source, and sandbox paths without
   running builds or tests. For schema version 2 it resolves the sandbox from the supplied repository
   root and rejects symbolic-link escape before Xcode graph discovery.
+- `mode-plan` expands one user-selected manual mode into stable, permission-aware steps. It is a
+  pre-execution plan only; `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` are never runtime
+  PASS evidence. The plan currently delegates execution to the existing static/build boundaries;
+  permitted test and full-mode execution remain staged work.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
   checks from explicit profile and policy inputs.
 - `static-evidence` scans the asserted Git-tree manifest directly; it never scans mutable

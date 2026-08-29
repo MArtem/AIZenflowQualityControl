@@ -149,6 +149,25 @@ private func emitAggregateEvidence(_ result: EvidenceAggregationExecutionResult)
     }
 }
 
+private func emitModePlan(_ plan: QualityModePlan) -> Never {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    guard let data = try? encoder.encode(plan),
+          let output = String(data: data, encoding: .utf8) else {
+        print(#"{"command":"mode-plan","schemaVersion":1,"status":"BLOCKED"}"#)
+        exit(2)
+    }
+    print(output)
+    switch plan.status {
+    case .pass, .notApplicable:
+        exit(0)
+    case .blocked:
+        exit(2)
+    case .fail, .notRunByUserDecision, .skipped:
+        exit(1)
+    }
+}
+
 private func evidenceURLs(from value: String) throws -> [URL] {
     let paths = value.split(separator: ",", omittingEmptySubsequences: false).map {
         String($0).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -879,7 +898,7 @@ guard arguments.count >= 2 else {
     emit(
         QualityCommands.blockedUsage(
             command: "usage",
-            message: "Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, build-evidence, or aggregate-evidence."
+            message: "Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, static, static-evidence, build-evidence, or aggregate-evidence."
         )
     )
 }
@@ -897,6 +916,21 @@ do {
         let options = try parseOptions(arguments.dropFirst(2), allowed: ["--expectation"])
         let expectation = try required("--expectation", in: options)
         emit(QualityCommands.validateEvidenceExpectation(at: fileURL(expectation)))
+
+    case "mode-plan":
+        let options = try parseOptions(
+            arguments.dropFirst(2),
+            allowed: ["--profile", "--mode"]
+        )
+        let profile = try required("--profile", in: options)
+        let modeValue = try required("--mode", in: options)
+        guard let mode = QualityMode(rawValue: modeValue) else {
+            emit(QualityCommands.blockedUsage(
+                command: "mode-plan",
+                message: "Mode must be static, build, build-and-tests, or full."
+            ))
+        }
+        emitModePlan(QualityCommands.modePlan(at: fileURL(profile), mode: mode))
 
     case "doctor":
         let options = try parseOptions(
@@ -1100,7 +1134,7 @@ do {
         emit(
             QualityCommands.blockedUsage(
                 command: command,
-                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, static, static-evidence, build-evidence, or aggregate-evidence."
+                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, static, static-evidence, build-evidence, or aggregate-evidence."
             )
         )
     }

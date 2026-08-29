@@ -326,6 +326,41 @@ struct StaticScanDocuments {
 }
 
 public enum QualityCommands {
+    public static func modePlan(at profileURL: URL, mode: QualityMode) -> QualityModePlan {
+        switch loadProfile(at: profileURL) {
+        case let .failure(check):
+            return QualityModePlan(
+                mode: mode,
+                steps: [QualityModeStep(
+                    id: check.id,
+                    command: "validate-profile",
+                    status: .blocked,
+                    applicability: "unknown",
+                    remediation: check.message
+                )]
+            )
+        case let .success(profile):
+            let contractIssues = ProfileValidator.validate(profile).filter {
+                $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+            }
+            guard contractIssues.isEmpty else {
+                return QualityModePlan(
+                    mode: mode,
+                    steps: contractIssues.map {
+                        QualityModeStep(
+                            id: $0.code,
+                            command: "validate-profile",
+                            status: .blocked,
+                            applicability: "unknown",
+                            remediation: $0.message
+                        )
+                    }
+                )
+            }
+            return QualityModePlanner.plan(profile: profile, mode: mode)
+        }
+    }
+
     public static func validateEvidenceExpectation(at expectationURL: URL) -> QualityReport {
         do {
             _ = try EvidenceExpectationDocumentLoader.load(from: expectationURL)

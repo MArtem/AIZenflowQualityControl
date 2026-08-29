@@ -53,3 +53,9 @@ review, artifact, and residual-risk expectations; it is not inferred from eviden
 `quality aggregate-evidence` command loads this format together with up to 64 evidence receipts and
 emits the closed `aggregate-evidence-result.schema.json` envelope. Invalid or unverifiable inputs
 remain evidence-free `BLOCKED`.
+
+`mode-plan-result.schema.json` defines the deterministic pre-execution plan emitted by
+`quality mode-plan`. It expands `static`, `build`, `build-and-tests`, and `full` into stable step
+IDs while preserving applicability and permission status. A mode plan is not runtime evidence:
+`NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` never become `PASS`; the actual execution
+boundaries must produce separately authenticated evidence.
