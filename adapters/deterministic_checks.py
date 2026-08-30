@@ -31,7 +31,7 @@ SECRET_MARKER = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|"
     r"(ghp_|github_pat_|xox[baprs]-|sk_live_|AKIA[0-9A-Z]{16})"
 )
-TODO_MARKER = re.compile(r"\b(?:TODO|FIXME)\b")
+TODO_MARKER = re.compile(r"(?:^|//|#|/\*|\*)\s*\b(?:TODO|FIXME)\b")
 TODO_METADATA = re.compile(
     r"\b(?:TODO|FIXME)\b\s*\(\s*owner\s*[=:]\s*[A-Za-z0-9._-]+\s+"
     r"(?:ticket|issue)\s*[=:]\s*[A-Za-z0-9._-]+\s+expires\s*[=:]\s*\d{4}-\d{2}-\d{2}\s*\)"

@@ -17,10 +17,11 @@ high-confidence private-key/credential markers and credential-shaped `.p12`, `.p
 are immutable in the adapter. Unsupported or unavailable checks return `BLOCKED`; they never become
 `PASS`. The adapter is check-only and does not write, rotate, or delete credentials.
 
-The same command also exposes `QC.TODO.OWNER`. It accepts a deliberately narrow marker format,
-for example `TODO(owner=alice ticket=APP-123 expires=2026-12-31): follow up`; every tracked
-`TODO`/`FIXME` without all three fields is a finding. Expiry presence is validated syntactically;
-calendar/ownership semantics remain a human review concern.
+The same command also exposes `QC.TODO.OWNER`. It accepts only comment-style markers and a
+deliberately narrow metadata format, for example `// TODO(owner=alice ticket=APP-123
+expires=2026-12-31): follow up`; every tracked comment `TODO`/`FIXME` without all three fields is
+a finding. Expiry presence is validated syntactically; calendar/ownership semantics remain a human
+review concern. Words inside ordinary strings, workflow labels, or identifiers are not markers.
 
 Example:
 
