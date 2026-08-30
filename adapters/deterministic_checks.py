@@ -31,6 +31,11 @@ SECRET_MARKER = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|"
     r"(ghp_|github_pat_|xox[baprs]-|sk_live_|AKIA[0-9A-Z]{16})"
 )
+TODO_MARKER = re.compile(r"\b(?:TODO|FIXME)\b")
+TODO_METADATA = re.compile(
+    r"\b(?:TODO|FIXME)\b\s*\(\s*owner\s*[=:]\s*[A-Za-z0-9._-]+\s+"
+    r"(?:ticket|issue)\s*[=:]\s*[A-Za-z0-9._-]+\s+expires\s*[=:]\s*\d{4}-\d{2}-\d{2}\s*\)"
+)
 
 
 class AdapterError(ValueError):
@@ -162,6 +167,26 @@ def findings_for_secrets(root: Path, paths: list[str]) -> list[dict[str, str]]:
     return findings
 
 
+def findings_for_todo_owner(root: Path) -> list[dict[str, str]]:
+    output = bounded_process(
+        root, ["grep", "-n", "-I", "-E", "-e", "TODO|FIXME", "HEAD", "--"],
+        MAX_GREP_OUTPUT_BYTES, allowed_returncodes={0, 1}
+    )
+    findings: list[dict[str, str]] = []
+    for record in output.decode("utf-8", errors="replace").splitlines():
+        if len(findings) >= MAX_FINDINGS:
+            break
+        parts = record.split(":", 3)
+        if len(parts) < 4 or not TODO_MARKER.search(parts[3]):
+            continue
+        if not TODO_METADATA.search(parts[3]):
+            findings.append({
+                "path": parts[1][:MAX_STRING_LENGTH],
+                "message": "TODO/FIXME must include owner, ticket/issue, and YYYY-MM-DD expiry metadata.",
+            })
+    return findings
+
+
 def report(check_id: str, revision: str, status: str, message: str, findings: list[dict[str, str]] | None = None) -> dict[str, Any]:
     check: dict[str, Any] = {"id": check_id, "status": status, "message": message}
     if findings:
@@ -190,6 +215,15 @@ def main() -> int:
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
             result = report(arguments.check, revision, "PASS", "No high-confidence tracked credential material was found.")
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.TODO.OWNER":
+            findings = findings_for_todo_owner(root)
+            if findings:
+                result = report(arguments.check, revision, "FAIL", "Tracked TODO/FIXME markers are missing ownership metadata.", findings)
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(arguments.check, revision, "PASS", "All tracked TODO/FIXME markers carry bounded ownership metadata.")
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         raise AdapterError(f"no executable adapter is registered for {arguments.check}")

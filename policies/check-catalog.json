@@ -152,8 +152,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Link the marker to an owner and ticket with a bounded expiry, or resolve it.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/todo/passing-project/", "negative": "fixtures/todo/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.ARCHITECTURE.REVIEW_CANDIDATE",
