@@ -60,6 +60,11 @@ IDs while preserving applicability and permission status. A mode plan is not run
 `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` never become `PASS`; the actual execution
 boundaries must produce separately authenticated evidence.
 
+`deterministic-check-result.schema.json` defines the first catalog-backed adapter result. It binds
+the check report to a lowercase Git `HEAD` revision and permits only the bounded
+`QC.SECRETS.TRACKED` finding shape. Adapter unavailability is represented as `BLOCKED`, not a
+successful empty scan.
+
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.
 The envelope never infers a composite evidence claim; callers needing one must supply an explicit

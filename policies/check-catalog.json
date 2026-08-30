@@ -89,8 +89,8 @@
       "severity": "block",
       "applicability": "always",
       "remediation": "Remove secrets, rotate exposed credentials, and use approved secret storage.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/secrets/passing-project/", "negative": "fixtures/secrets/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.GENERATED.OWNERSHIP",
