@@ -23,6 +23,13 @@ expires=2026-12-31): follow up`; every tracked comment `TODO`/`FIXME` without al
 a finding. Expiry presence is validated syntactically; calendar/ownership semantics remain a human
 review concern. Words inside ordinary strings, workflow labels, or identifiers are not markers.
 
+`QC.GENERATED.OWNERSHIP` requires a tracked `.quality-control/generated-files.json` manifest. Each
+entry names one regular UTF-8 Git-tree file, its SHA-256 digest, generator, and generator version.
+The file must contain exactly one marker such as `// @generated-by generator=swiftgen version=6.6.2`.
+Any marker-bearing tracked file absent from the manifest is a finding. The adapter does not infer
+generated status from filenames, does not execute generators, and treats malformed manifests,
+symlinks, unsupported files, and resource-limit exhaustion as `BLOCKED`.
+
 Example:
 
 ```sh
@@ -30,6 +37,13 @@ python3 adapters/deterministic_checks.py \
   --repository-root <repository> \
   --catalog policies/check-catalog.json \
   --check QC.SECRETS.TRACKED
+```
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.GENERATED.OWNERSHIP
 ```
 
 The JSON result follows `schemas/deterministic-check-result.schema.json`. This adapter is a local

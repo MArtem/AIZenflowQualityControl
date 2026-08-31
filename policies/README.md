@@ -16,3 +16,10 @@ catalog commitments, not existing evidence, until their adapters and fixtures ar
 check-only: it scans a clean exact Git `HEAD` for high-confidence credential markers and
 credential-shaped provisioning/key containers. The remaining staged entries still require their
 own bounded adapters and positive/negative fixtures.
+
+`QC.GENERATED.OWNERSHIP` is an executable, repository-neutral adapter. It requires the tracked
+`.quality-control/generated-files.json` manifest, validates every declared path, SHA-256 digest,
+generator/version pair, and exactly one `@generated-by generator=<name> version=<version>` marker.
+Text files carrying that marker but absent from the manifest fail; filenames alone are never treated
+as evidence of generated output. Missing or malformed manifests, traversal, symlinks, unsupported
+objects, and immutable byte/file limits are `BLOCKED`, never `PASS`.

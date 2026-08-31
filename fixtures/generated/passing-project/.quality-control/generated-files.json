@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "path": "Sources/Generated/Welcome.swift",
+      "generator": "fixture-generator",
+      "version": "1.0.0",
+      "sha256": "e2d33a553bde3d4498c7c8b4db2c6273a90e530b9cff1122e7ab30c6133452e6"
+    }
+  ]
+}

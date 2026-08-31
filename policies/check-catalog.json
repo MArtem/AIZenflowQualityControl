@@ -98,8 +98,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Regenerate owned artifacts from the pinned generator or remove unowned output.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/generated/passing-project/", "negative": "fixtures/generated/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.LOCALIZATION.CATALOG",

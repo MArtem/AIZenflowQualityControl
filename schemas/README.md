@@ -60,10 +60,15 @@ IDs while preserving applicability and permission status. A mode plan is not run
 `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` never become `PASS`; the actual execution
 boundaries must produce separately authenticated evidence.
 
-`deterministic-check-result.schema.json` defines the first catalog-backed adapter result. It binds
-the check report to a lowercase Git `HEAD` revision and permits only the bounded
-`QC.SECRETS.TRACKED` finding shape. Adapter unavailability is represented as `BLOCKED`, not a
-successful empty scan.
+`deterministic-check-result.schema.json` defines catalog-backed adapter results. It binds the check
+report to a lowercase Git `HEAD` revision and permits the bounded `QC.SECRETS.TRACKED`,
+`QC.TODO.OWNER`, and `QC.GENERATED.OWNERSHIP` finding shapes. Adapter unavailability is
+represented as `BLOCKED`, not a successful empty scan.
+
+`generated-files-manifest.schema.json` defines the transport shape for the tracked generated-file
+ownership manifest. Runtime validation additionally enforces unique normalized paths, regular Git
+tree objects, UTF-8 content, exact SHA-256 bytes, one matching marker, and the immutable aggregate
+limits; schema-valid input alone is not ownership evidence.
 
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.

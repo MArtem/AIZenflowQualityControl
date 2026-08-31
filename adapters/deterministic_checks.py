@@ -10,6 +10,7 @@ broader secret heuristics require separate fixtures and review.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -26,6 +27,11 @@ MAX_TRACKED_FILES = 100_000
 MAX_FINDINGS = 64
 MAX_STRING_LENGTH = 1_024
 COMMAND_TIMEOUT_SECONDS = 5
+MAX_GENERATED_MANIFEST_BYTES = 512 * 1024
+MAX_GENERATED_FILES = 256
+MAX_GENERATED_FILE_BYTES = 4 * 1024 * 1024
+MAX_GENERATED_TOTAL_BYTES = 16 * 1024 * 1024
+GENERATED_MANIFEST_PATH = ".quality-control/generated-files.json"
 SECRET_PATH_SUFFIXES = (".p12", ".pfx", ".mobileprovision")
 SECRET_MARKER = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|"
@@ -36,6 +42,14 @@ TODO_METADATA = re.compile(
     r"\b(?:TODO|FIXME)\b\s*\(\s*owner\s*[=:]\s*[A-Za-z0-9._-]+\s+"
     r"(?:ticket|issue)\s*[=:]\s*[A-Za-z0-9._-]+\s+expires\s*[=:]\s*\d{4}-\d{2}-\d{2}\s*\)"
 )
+GENERATED_MARKER = re.compile(
+    r"@generated-by[ \t]+generator=(?P<generator>[A-Za-z0-9._/-]{1,128})[ \t]+"
+    r"version=(?P<version>[A-Za-z0-9][A-Za-z0-9._+/-]{0,127})(?:[ \t]|$)",
+    re.MULTILINE,
+)
+GENERATOR_NAME = re.compile(r"[A-Za-z0-9._/-]{1,128}")
+GENERATOR_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+/-]{0,127}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class AdapterError(ValueError):
@@ -125,6 +139,37 @@ def tracked_paths(root: Path) -> list[str]:
     return sorted(paths)
 
 
+def tracked_tree_entries(root: Path) -> dict[str, str]:
+    """Return regular Git-tree paths and modes without consulting the mutable index."""
+    output = bounded_process(root, ["ls-tree", "-r", "-z", "HEAD", "--"], MAX_GIT_OUTPUT_BYTES)
+    entries: dict[str, str] = {}
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = header.split(b" ", 2)
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise AdapterError("tracked Git tree has a malformed generated-file entry") from error
+        if not path or len(path) > MAX_STRING_LENGTH or path.startswith("/") or "\\" in path:
+            raise AdapterError("tracked Git tree has an invalid path")
+        if any(part in ("", ".", "..") for part in path.split("/")):
+            raise AdapterError("tracked Git tree has a traversal or empty path")
+        if (
+            object_type != b"blob"
+            or len(object_id) != 40
+            or any(character not in b"0123456789abcdef" for character in object_id)
+        ):
+            raise AdapterError("tracked Git tree has an unsupported object entry")
+        if path in entries:
+            raise AdapterError("tracked Git tree contains a duplicate path")
+        entries[path] = mode.decode("ascii")
+    if len(entries) > MAX_TRACKED_FILES:
+        raise AdapterError("tracked Git tree exceeds the immutable file limit")
+    return entries
+
+
 def current_revision(root: Path) -> str:
     revision = git_text(root, ["rev-parse", "HEAD"], 128).strip()
     if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
@@ -187,6 +232,145 @@ def findings_for_todo_owner(root: Path) -> list[dict[str, str]]:
     return findings
 
 
+def generated_manifest(root: Path) -> list[dict[str, str]]:
+    try:
+        data = bounded_process(
+            root,
+            ["show", f"HEAD:{GENERATED_MANIFEST_PATH}"],
+            MAX_GENERATED_MANIFEST_BYTES,
+        )
+    except AdapterError as error:
+        raise AdapterError(
+            f"{GENERATED_MANIFEST_PATH} must be present and readable from Git HEAD"
+        ) from error
+    try:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError, AdapterError) as error:
+        raise AdapterError(f"{GENERATED_MANIFEST_PATH} is malformed: {error}") from error
+    if not isinstance(value, dict) or set(value) != {"schemaVersion", "files"}:
+        raise AdapterError(f"{GENERATED_MANIFEST_PATH} has an unsupported property set")
+    if type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1:
+        raise AdapterError(f"{GENERATED_MANIFEST_PATH} must use schemaVersion 1")
+    files = value.get("files")
+    if not isinstance(files, list) or len(files) > MAX_GENERATED_FILES:
+        raise AdapterError(f"{GENERATED_MANIFEST_PATH} exceeds the immutable file-entry limit")
+
+    declarations: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(files):
+        if not isinstance(entry, dict) or set(entry) != {"path", "generator", "version", "sha256"}:
+            raise AdapterError(f"generated file entry {index} has an unsupported property set")
+        path = entry.get("path")
+        generator = entry.get("generator")
+        version = entry.get("version")
+        digest = entry.get("sha256")
+        if not isinstance(path, str) or not path or len(path) > MAX_STRING_LENGTH:
+            raise AdapterError(f"generated file entry {index} has an invalid path")
+        if path.startswith("/") or path.startswith("~") or "\\" in path:
+            raise AdapterError(f"generated file entry {index} has an invalid path")
+        if any(part in ("", ".", "..") for part in path.split("/")):
+            raise AdapterError(f"generated file entry {index} has a traversal or empty path")
+        if path == GENERATED_MANIFEST_PATH or path in seen:
+            raise AdapterError(f"generated file entry {index} has a duplicate or reserved path")
+        if not isinstance(generator, str) or not GENERATOR_NAME.fullmatch(generator):
+            raise AdapterError(f"generated file entry {index} has an invalid generator")
+        if not isinstance(version, str) or not GENERATOR_VERSION.fullmatch(version):
+            raise AdapterError(f"generated file entry {index} has an invalid generator version")
+        if not isinstance(digest, str) or not SHA256.fullmatch(digest):
+            raise AdapterError(f"generated file entry {index} has an invalid sha256")
+        seen.add(path)
+        declarations.append({
+            "path": path,
+            "generator": generator,
+            "version": version,
+            "sha256": digest,
+        })
+    return declarations
+
+
+def generated_marker_paths(root: Path) -> list[str]:
+    output = bounded_process(
+        root,
+        [
+            "grep", "-l", "-I", "-E",
+            "-e", "@generated-by",
+            "HEAD", "--",
+        ],
+        MAX_GREP_OUTPUT_BYTES,
+        allowed_returncodes={0, 1},
+    )
+    try:
+        decoded_output = output.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AdapterError("generated marker scan returned non-UTF-8 output") from error
+    paths = [line.removeprefix("HEAD:") for line in decoded_output.splitlines() if line]
+    if len(paths) > MAX_GENERATED_FILES:
+        raise AdapterError("generated marker scan exceeded the immutable file-entry limit")
+    if any(
+        not path
+        or len(path) > MAX_STRING_LENGTH
+        or path.startswith("/")
+        or "\\" in path
+        or any(part in ("", ".", "..") for part in path.split("/"))
+        for path in paths
+    ):
+        raise AdapterError("generated marker scan returned an invalid path")
+    return paths
+
+
+def findings_for_generated_ownership(root: Path) -> list[dict[str, str]]:
+    declarations = generated_manifest(root)
+    entries = tracked_tree_entries(root)
+    findings: list[dict[str, str]] = []
+    declared_paths = {entry["path"] for entry in declarations}
+    total_bytes = 0
+
+    for declaration in declarations:
+        path = declaration["path"]
+        if path not in entries:
+            raise AdapterError(f"generated manifest references an untracked path: {path}")
+        if entries[path] not in {"100644", "100755"}:
+            raise AdapterError(f"generated manifest references a non-regular path: {path}")
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_GENERATED_FILE_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_GENERATED_TOTAL_BYTES:
+            raise AdapterError("generated files exceed the immutable aggregate byte limit")
+        if hashlib.sha256(data).hexdigest() != declaration["sha256"]:
+            findings.append({"path": path, "message": "Declared SHA-256 does not match Git HEAD."})
+            if len(findings) >= MAX_FINDINGS:
+                return findings
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"declared generated file must be UTF-8 text: {path}") from error
+        markers = list(GENERATED_MARKER.finditer(text))
+        if len(markers) != 1:
+            findings.append({
+                "path": path,
+                "message": "Generated file must contain exactly one @generated-by marker.",
+            })
+        elif (
+            markers[0].group("generator") != declaration["generator"]
+            or markers[0].group("version") != declaration["version"]
+        ):
+            findings.append({
+                "path": path,
+                "message": "@generated-by marker does not match the declared generator and version.",
+            })
+        if len(findings) >= MAX_FINDINGS:
+            return findings
+
+    for path in generated_marker_paths(root):
+        if path not in declared_paths:
+            findings.append({
+                "path": path,
+                "message": "Generated marker is present but the path is absent from the ownership manifest.",
+            })
+            if len(findings) >= MAX_FINDINGS:
+                break
+    return findings
+
+
 def report(check_id: str, revision: str, status: str, message: str, findings: list[dict[str, str]] | None = None) -> dict[str, Any]:
     check: dict[str, Any] = {"id": check_id, "status": status, "message": message}
     if findings:
@@ -224,6 +408,26 @@ def main() -> int:
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
             result = report(arguments.check, revision, "PASS", "All tracked TODO/FIXME markers carry bounded ownership metadata.")
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.GENERATED.OWNERSHIP":
+            findings = findings_for_generated_ownership(root)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Generated ownership declarations or markers are inconsistent.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "All declared generated files have reproducible ownership markers and matching hashes.",
+            )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         raise AdapterError(f"no executable adapter is registered for {arguments.check}")
