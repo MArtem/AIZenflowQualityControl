@@ -66,3 +66,9 @@ env \
     -Xswiftc -module-cache-path \
     -Xswiftc "${QC_SWIFT_TEST_ROOT}/module-cache"
 ```
+
+The Python deterministic adapter contracts are exercised separately:
+
+```bash
+TMPDIR=<task-local-runtime-directory> python3 -m unittest discover -s tests -p 'deterministic_checks_test.py'
+```

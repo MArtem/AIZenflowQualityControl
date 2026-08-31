@@ -17,3 +17,7 @@ The dedicated policy is deliberately stricter than the canonical policy. This ke
 fixture inert during the normal whole-repository self-scan while allowing an explicit verifier or
 future public canary to prove the expected failure path. These fixtures do not claim to be
 buildable Xcode projects and provide no build, test, Simulator, or application-runtime evidence.
+
+`generated/passing-project/` contains a manifest, matching hash, generator/version declaration, and
+marker. `generated/failing-project/` contains a marker-bearing file omitted from its manifest; the
+adapter must return `FAIL`. These fixtures define the ownership protocol without filename heuristics.
