@@ -1,0 +1,3 @@
+/* Russian localization. */
+"welcome.title" = "Добро пожаловать";
+"welcome.count" = "%d объектов";

@@ -26,3 +26,8 @@ adapter must return `FAIL`. These fixtures define the ownership protocol without
 Package.resolved v2 pin. `dependencies/failing-project/` contains an external declaration whose
 lockfile resolves a different identity; the adapter must return `FAIL`. Additional malformed,
 duplicate, and unsupported lock shapes are covered by focused adapter tests.
+
+`localization/passing-project/` contains matching English and Russian `.strings` resources.
+`localization/failing-project/` intentionally omits one Russian key; the localization adapter must
+return `FAIL`. Malformed, duplicate, `.stringsdict`, and `.xcstrings` cases are covered by focused
+adapter tests.

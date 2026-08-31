@@ -13,11 +13,14 @@ import argparse
 import hashlib
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from xml.parsers.expat import ExpatError
+from xml.etree import ElementTree
 
 
 MAX_CATALOG_BYTES = 1_000_000
@@ -37,6 +40,12 @@ MAX_DEPENDENCY_LOCKFILE_BYTES = 1 * 1024 * 1024
 MAX_DEPENDENCY_PINS = 2_048
 MAX_DEPENDENCY_DECLARATIONS = 256
 MAX_DEPENDENCY_TEXT_BYTES = 1 * 1024 * 1024
+MAX_LOCALIZATION_FILES = 512
+MAX_LOCALIZATION_FILE_BYTES = 2 * 1024 * 1024
+MAX_LOCALIZATION_TOTAL_BYTES = 32 * 1024 * 1024
+MAX_LOCALIZATION_KEYS = 8_192
+MAX_LOCALIZATION_LOCALES = 64
+MAX_LOCALIZATION_NESTING = 32
 SECRET_PATH_SUFFIXES = (".p12", ".pfx", ".mobileprovision")
 SECRET_MARKER = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|"
@@ -405,6 +414,298 @@ def findings_for_dependency_lock_drift(root: Path, paths: list[str]) -> list[dic
     return findings
 
 
+def localization_paths(paths: list[str]) -> list[str]:
+    resources = sorted(
+        path for path in paths
+        if Path(path).suffix.lower() in {".strings", ".stringsdict", ".xcstrings"}
+    )
+    if len(resources) > MAX_LOCALIZATION_FILES:
+        raise AdapterError("localization resources exceed the immutable file limit")
+    return resources
+
+
+def localization_resource_group(path: str) -> tuple[str, str]:
+    parts = Path(path).parts
+    for index, part in enumerate(parts):
+        if part.lower().endswith(".lproj"):
+            locale = part[:-6].strip()
+            logical_parts = parts[:index] + parts[index + 1:]
+            logical = "/".join(logical_parts) or Path(path).name
+            return logical, locale or "default"
+    return path, "default"
+
+
+def parse_localization_json(data: bytes, label: str) -> Any:
+    if len(data) > MAX_LOCALIZATION_FILE_BYTES:
+        raise AdapterError(f"{label} exceeds the immutable byte limit")
+    try:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError, AdapterError) as error:
+        raise AdapterError(f"{label} is malformed: {error}") from error
+
+
+def quoted_localization_value(text: str, index: int, label: str) -> tuple[str, int]:
+    if index >= len(text) or text[index] != '"':
+        raise AdapterError(f"{label} has an invalid quoted string")
+    index += 1
+    characters: list[str] = []
+    while index < len(text):
+        character = text[index]
+        index += 1
+        if character == '"':
+            return "".join(characters), index
+        if character in "\r\n":
+            raise AdapterError(f"{label} has an unterminated quoted string")
+        if character != "\\":
+            characters.append(character)
+            continue
+        if index >= len(text):
+            raise AdapterError(f"{label} has an incomplete escape")
+        escape = text[index]
+        index += 1
+        simple_escapes = {"\\": "\\", '"': '"', "n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f"}
+        if escape in simple_escapes:
+            characters.append(simple_escapes[escape])
+            continue
+        width = 4 if escape == "u" else 8 if escape == "U" else 0
+        if width:
+            digits = text[index:index + width]
+            if len(digits) != width or not re.fullmatch(r"[0-9a-fA-F]+", digits):
+                raise AdapterError(f"{label} has an invalid Unicode escape")
+            codepoint = int(digits, 16)
+            if codepoint > 0x10FFFF:
+                raise AdapterError(f"{label} has an invalid Unicode code point")
+            characters.append(chr(codepoint))
+            index += width
+            continue
+        characters.append(escape)
+    raise AdapterError(f"{label} has an unterminated quoted string")
+
+
+def skip_localization_space(text: str, index: int, label: str) -> int:
+    while index < len(text):
+        if text[index].isspace():
+            index += 1
+            continue
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            index += 2
+            depth = 1
+            while index < len(text) and depth:
+                if text.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif text.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            if depth:
+                raise AdapterError(f"{label} has an unterminated comment")
+            continue
+        break
+    return index
+
+
+def parse_localization_strings(data: bytes, label: str) -> tuple[set[str], set[str]]:
+    if len(data) > MAX_LOCALIZATION_FILE_BYTES:
+        raise AdapterError(f"{label} exceeds the immutable byte limit")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AdapterError(f"{label} must be UTF-8 text") from error
+    entries: dict[str, str] = {}
+    index = 0
+    while True:
+        index = skip_localization_space(text, index, label)
+        if index == len(text):
+            break
+        key, index = quoted_localization_value(text, index, label)
+        if not key:
+            raise AdapterError(f"{label} contains an empty localization key")
+        if key in entries:
+            raise AdapterError(f"{label} contains a duplicate localization key: {key}")
+        index = skip_localization_space(text, index, label)
+        if index >= len(text) or text[index] != "=":
+            raise AdapterError(f"{label} is missing '=' after localization key")
+        index = skip_localization_space(text, index + 1, label)
+        value, index = quoted_localization_value(text, index, label)
+        index = skip_localization_space(text, index, label)
+        if index >= len(text) or text[index] != ";":
+            raise AdapterError(f"{label} is missing ';' after localization value")
+        entries[key] = value
+        index += 1
+        if len(entries) > MAX_LOCALIZATION_KEYS:
+            raise AdapterError(f"{label} exceeds the immutable key limit")
+    return set(entries), {key for key, value in entries.items() if not value.strip()}
+
+
+def parse_localization_stringsdict(data: bytes, label: str) -> tuple[set[str], set[str]]:
+    if len(data) > MAX_LOCALIZATION_FILE_BYTES:
+        raise AdapterError(f"{label} exceeds the immutable byte limit")
+    if data.lstrip().startswith(b"<"):
+        try:
+            xml_root = ElementTree.fromstring(data)
+        except ElementTree.ParseError as error:
+            raise AdapterError(f"{label} is malformed: {error}") from error
+
+        def reject_duplicate_plist_keys(node: ElementTree.Element) -> None:
+            if node.tag == "dict":
+                children = list(node)
+                keys = [child.text for child in children if child.tag == "key"]
+                if len(keys) != len(set(keys)):
+                    raise AdapterError(f"{label} contains duplicate stringsdict keys")
+            for child in node:
+                reject_duplicate_plist_keys(child)
+
+        reject_duplicate_plist_keys(xml_root)
+    try:
+        value = plistlib.loads(data)
+    except (ExpatError, plistlib.InvalidFileException, OverflowError, TypeError, ValueError) as error:
+        raise AdapterError(f"{label} is malformed: {error}") from error
+    if not isinstance(value, dict) or len(value) > MAX_LOCALIZATION_KEYS:
+        raise AdapterError(f"{label} has an unsupported stringsdict shape")
+    empty_keys: set[str] = set()
+    for key, entry in value.items():
+        if not isinstance(key, str) or not key:
+            raise AdapterError(f"{label} has an invalid stringsdict key")
+        format_value = entry.get("NSStringLocalizedFormatKey") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(format_value, str):
+            raise AdapterError(f"{label} has an invalid localized format entry: {key}")
+        if not format_value.strip():
+            empty_keys.add(key)
+        plural_entries = [
+            child for child in entry.values()
+            if isinstance(child, dict) and child.get("NSStringFormatSpecTypeKey") == "NSStringPluralRuleType"
+        ]
+        if not plural_entries:
+            raise AdapterError(f"{label} has no plural rule entry: {key}")
+        for plural_entry in plural_entries:
+            categories = set(plural_entry) - {"NSStringFormatSpecTypeKey", "NSStringFormatValueTypeKey"}
+            if not categories or any(not isinstance(plural_entry[category], str) for category in categories):
+                raise AdapterError(f"{label} has an invalid plural category entry: {key}")
+            if any(not plural_entry[category].strip() for category in categories):
+                empty_keys.add(key)
+    return {key for key in value if isinstance(key, str)}, empty_keys
+
+
+def validate_xcstrings_node(node: Any, label: str, depth: int = 0) -> bool:
+    if depth > MAX_LOCALIZATION_NESTING or not isinstance(node, dict):
+        raise AdapterError(f"{label} has an unsupported xcstrings localization shape")
+    if "stringUnit" in node:
+        if set(node) != {"stringUnit"} or not isinstance(node["stringUnit"], dict):
+            raise AdapterError(f"{label} has an unsupported xcstrings string unit")
+        unit = node["stringUnit"]
+        if set(unit) != {"state", "value"} or unit.get("state") not in {"translated", "needs_review", "new", "stale"}:
+            raise AdapterError(f"{label} has an invalid xcstrings string unit")
+        if not isinstance(unit.get("value"), str):
+            raise AdapterError(f"{label} has an invalid xcstrings value")
+        return bool(unit["value"].strip())
+    if set(node) != {"variations"} or not isinstance(node.get("variations"), dict) or not node["variations"]:
+        raise AdapterError(f"{label} has an unsupported xcstrings variation")
+    has_nonempty_value = False
+    for dimension, variants in node["variations"].items():
+        if not isinstance(dimension, str) or not dimension or not isinstance(variants, dict) or not variants:
+            raise AdapterError(f"{label} has an invalid xcstrings variation dimension")
+        for variant, child in variants.items():
+            if not isinstance(variant, str) or not variant:
+                raise AdapterError(f"{label} has an invalid xcstrings variation key")
+            has_nonempty_value = validate_xcstrings_node(child, label, depth + 1) or has_nonempty_value
+    return has_nonempty_value
+
+
+def parse_localization_xcstrings(data: bytes, path: str) -> tuple[set[str], list[dict[str, str]]]:
+    value = parse_localization_json(data, path)
+    if not isinstance(value, dict) or set(value) != {"sourceLanguage", "strings", "version"}:
+        raise AdapterError(f"{path} has an unsupported xcstrings top-level shape")
+    source_language = value["sourceLanguage"]
+    strings = value["strings"]
+    if not isinstance(source_language, str) or not source_language.strip() or not isinstance(value["version"], str):
+        raise AdapterError(f"{path} has invalid xcstrings metadata")
+    if not isinstance(strings, dict) or len(strings) > MAX_LOCALIZATION_KEYS:
+        raise AdapterError(f"{path} exceeds the immutable xcstrings key limit")
+    findings: list[dict[str, str]] = []
+    keys: set[str] = set()
+    for key, entry in strings.items():
+        if not isinstance(key, str) or not key:
+            raise AdapterError(f"{path} has an invalid xcstrings key")
+        if not isinstance(entry, dict) or set(entry) - {"extractionState", "localizations"}:
+            raise AdapterError(f"{path} has an unsupported xcstrings entry: {key}")
+        localizations = entry.get("localizations")
+        if not isinstance(localizations, dict) or len(localizations) > MAX_LOCALIZATION_LOCALES:
+            raise AdapterError(f"{path} has an invalid xcstrings localization map: {key}")
+        if source_language not in localizations:
+            findings.append({"path": path, "message": f"xcstrings key has no source-language fallback: {key}"})
+        for locale, node in localizations.items():
+            if not isinstance(locale, str) or not locale:
+                raise AdapterError(f"{path} has an invalid xcstrings locale: {key}")
+            source_nonempty = validate_xcstrings_node(node, f"{path}:{key}:{locale}")
+            if locale == source_language and not source_nonempty:
+                findings.append({"path": path, "message": f"xcstrings source-language fallback is empty: {key}"})
+        keys.add(key)
+    return keys, findings
+
+
+def findings_for_localization_catalog(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    resources = localization_paths(paths)
+    groups: dict[str, dict[str, tuple[set[str], set[str]]]] = {}
+    findings: list[dict[str, str]] = []
+    total_bytes = 0
+    for path in resources:
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_LOCALIZATION_FILE_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_LOCALIZATION_TOTAL_BYTES:
+            raise AdapterError("localization resources exceed the immutable aggregate byte limit")
+        suffix = Path(path).suffix.lower()
+        if suffix == ".strings":
+            keys, empty = parse_localization_strings(data, path)
+            group, locale = localization_resource_group(path)
+            groups.setdefault(group, {})[locale] = (keys, empty)
+        elif suffix == ".stringsdict":
+            keys, empty = parse_localization_stringsdict(data, path)
+            group, locale = localization_resource_group(path)
+            groups.setdefault(group, {})[locale] = (keys, empty)
+        else:
+            _, xcstrings_findings = parse_localization_xcstrings(data, path)
+            findings.extend(xcstrings_findings)
+            if len(findings) >= MAX_FINDINGS:
+                return findings[:MAX_FINDINGS]
+
+    for group, locales in groups.items():
+        if len(locales) > MAX_LOCALIZATION_LOCALES:
+            raise AdapterError(f"localization resource group exceeds the locale limit: {group}")
+        all_keys = set().union(*(facts[0] for facts in locales.values()))
+        fallback_locale = next(
+            (locale for locale in locales if locale.lower() in {"base", "en"}),
+            sorted(locales)[0],
+        )
+        for locale, (keys, empty) in sorted(locales.items()):
+            missing = sorted(all_keys - keys)
+            extra = sorted(keys - all_keys)
+            if missing or extra:
+                detail = []
+                if missing:
+                    detail.append(f"missing {', '.join(missing[:8])}")
+                if extra:
+                    detail.append(f"unexpected {', '.join(extra[:8])}")
+                findings.append({
+                    "path": group,
+                    "message": f"Locale {locale} does not match localization key parity ({'; '.join(detail)}).",
+                })
+            if locale == fallback_locale:
+                for key in sorted(empty):
+                    findings.append({
+                        "path": group,
+                        "message": f"Fallback localization value is empty: {key}",
+                    })
+            if len(findings) >= MAX_FINDINGS:
+                return findings[:MAX_FINDINGS]
+    return findings
+
+
 def generated_manifest(root: Path) -> list[dict[str, str]]:
     try:
         data = bounded_process(
@@ -620,6 +921,26 @@ def main() -> int:
                 revision,
                 "PASS",
                 "Tracked dependency lockfiles are valid and match external declarations.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.LOCALIZATION.CATALOG":
+            findings = findings_for_localization_catalog(root, paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Localization resources are malformed, incomplete, or missing fallback coverage.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "Tracked localization resources are valid and have consistent key/fallback coverage.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0

@@ -61,3 +61,17 @@ python3 adapters/deterministic_checks.py \
 
 The JSON result follows `schemas/deterministic-check-result.schema.json`. This adapter is a local
 engine capability; a consumer workflow may invoke it manually after pinning the engine revision.
+
+`QC.LOCALIZATION.CATALOG` validates tracked `.strings`, `.stringsdict`, and `.xcstrings` resources.
+It parses each format with bounded input, rejects malformed, duplicate, unsupported, or oversized
+resources as `BLOCKED`, and reports locale key drift or empty fallback values as `FAIL`. Legacy
+`.lproj` resources are grouped by logical path; `Base` or `en` is preferred as the fallback locale,
+with a deterministic lexical fallback when neither is present. Linguistic quality remains a human
+review concern.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.LOCALIZATION.CATALOG
+```
