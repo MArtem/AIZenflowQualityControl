@@ -7,6 +7,16 @@ public enum QualityStatus: String, Codable, Sendable {
     case blocked = "BLOCKED"
 }
 
+/// Defines whether a static scan may run without authoritative Xcode source-membership evidence.
+///
+/// The default keeps schemaVersion 2 profiles blocked until build-graph evidence is available.
+/// `explicit-source-paths` is an intentionally narrower, caller-selected scan that reports only
+/// the configured source roots and never claims Xcode target membership.
+public enum StaticScanScope: String, Equatable, Sendable {
+    case xcodeBuildGraph = "xcode-build-graph"
+    case explicitSourcePaths = "explicit-source-paths"
+}
+
 public struct QualityCheck: Codable, Sendable {
     public let id: String
     public let status: QualityStatus
@@ -594,7 +604,8 @@ public enum QualityCommands {
     public static func staticScan(
         profileURL: URL,
         policyURL: URL,
-        repositoryRoot: URL
+        repositoryRoot: URL,
+        scope: StaticScanScope = .xcodeBuildGraph
     ) -> QualityReport {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
@@ -603,6 +614,7 @@ public enum QualityCommands {
             profileURL: profileURL,
             policyURL: policyURL,
             repositoryRoot: repositoryRoot,
+            scope: scope,
             documents: nil,
             limits: .production,
             deadlineExceeded: { _, _ in clock.now >= deadline }
@@ -612,7 +624,8 @@ public enum QualityCommands {
     package static func staticWorkerResponse(
         profileURL: URL,
         policyURL: URL,
-        repositoryRoot: URL
+        repositoryRoot: URL,
+        scope: StaticScanScope = .xcodeBuildGraph
     ) -> StaticWorkerResponse {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
@@ -626,6 +639,7 @@ public enum QualityCommands {
             profileURL: profileURL,
             policyURL: policyURL,
             repositoryRoot: repositoryRoot,
+            scope: scope,
             documents: documents,
             limits: .production,
             deadlineExceeded: { _, _ in clock.now >= deadline }
@@ -681,6 +695,7 @@ public enum QualityCommands {
         profileURL: URL,
         policyURL: URL,
         repositoryRoot: URL,
+        scope: StaticScanScope = .xcodeBuildGraph,
         documents: StaticScanDocuments? = nil,
         limits: StaticScanLimits,
         deadlineExceeded: (_ scannedEntries: Int, _ reportedFindings: Int) -> Bool = { _, _ in false }
@@ -690,8 +705,12 @@ public enum QualityCommands {
             return QualityReport(command: "static", checks: [check])
         case let .success(profile):
             let profileIssues = ProfileValidator.validate(profile)
-            guard profileIssues.isEmpty else {
-                return QualityReport(command: "static", checks: checks(for: profileIssues))
+            let blockingProfileIssues = profileIssues.filter {
+                scope != .explicitSourcePaths
+                    || $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+            }
+            guard blockingProfileIssues.isEmpty else {
+                return QualityReport(command: "static", checks: checks(for: blockingProfileIssues))
             }
 
             let policy: StaticPolicy
@@ -731,6 +750,16 @@ public enum QualityCommands {
                     message: "Project profile contract is valid."
                 )
             ] + policyChecks
+
+            if scope == .explicitSourcePaths {
+                checks.append(
+                    QualityCheck(
+                        id: "QC.STATIC.SCOPE",
+                        status: .pass,
+                        message: "Static scan is limited to the profile sourcePaths; Xcode target membership is not asserted."
+                    )
+                )
+            }
 
             let rootCheck = directoryCheck(
                 id: "QC.STATIC.REPOSITORY_ROOT",

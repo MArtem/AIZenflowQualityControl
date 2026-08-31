@@ -482,12 +482,14 @@ private func runStaticWorker(
     profileURL: URL,
     policyURL: URL,
     repositoryRoot: URL,
+    scope: StaticScanScope = .xcodeBuildGraph,
     deadlineEpochSeconds: String? = nil
 ) -> QualityReport {
     runStaticWorkerExecution(
         profileURL: profileURL,
         policyURL: policyURL,
         repositoryRoot: repositoryRoot,
+        scope: scope,
         deadlineEpochSeconds: deadlineEpochSeconds
     ).report
 }
@@ -501,6 +503,7 @@ private func runStaticWorkerExecution(
     profileURL: URL,
     policyURL: URL,
     repositoryRoot: URL,
+    scope: StaticScanScope = .xcodeBuildGraph,
     manifestURL: URL? = nil,
     expectedWorkerCodeDirectoryHash: String? = nil,
     deadlineEpochSeconds: String? = nil
@@ -524,6 +527,8 @@ private func runStaticWorkerExecution(
     ]
     if let manifestURL {
         process.arguments! += ["--manifest", manifestURL.path]
+    } else if scope == .explicitSourcePaths {
+        process.arguments! += ["--scope", scope.rawValue]
     }
     var environment = ProcessInfo.processInfo.environment
     environment[staticWorkerEnvironmentKey] = "1"
@@ -1199,16 +1204,23 @@ do {
     case "static":
         let options = try parseOptions(
             arguments.dropFirst(2),
-            allowed: ["--profile", "--policy", "--repository-root"]
+            allowed: ["--profile", "--policy", "--repository-root", "--scope"]
         )
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
         let repositoryRoot = try required("--repository-root", in: options)
+        let scope = try options["--scope"].map {
+            guard let value = StaticScanScope(rawValue: $0) else {
+                throw CLIError.message("Unsupported static scan scope: \($0)")
+            }
+            return value
+        } ?? .xcodeBuildGraph
         emit(
             runStaticWorker(
                 profileURL: fileURL(profile),
                 policyURL: fileURL(policy),
-                repositoryRoot: fileURL(repositoryRoot)
+                repositoryRoot: fileURL(repositoryRoot),
+                scope: scope
             )
         )
 
@@ -1317,11 +1329,20 @@ do {
         }
         let options = try parseOptions(
             arguments.dropFirst(2),
-            allowed: ["--profile", "--policy", "--repository-root", "--manifest"]
+            allowed: ["--profile", "--policy", "--repository-root", "--manifest", "--scope"]
         )
         let profile = try required("--profile", in: options)
         let policy = try required("--policy", in: options)
         let repositoryRoot = try required("--repository-root", in: options)
+        let scope = try options["--scope"].map {
+            guard let value = StaticScanScope(rawValue: $0) else {
+                throw CLIError.message("Unsupported static scan scope: \($0)")
+            }
+            return value
+        } ?? .xcodeBuildGraph
+        if options["--manifest"] != nil, options["--scope"] != nil {
+            throw CLIError.message("Static evidence workers cannot use an explicit static scan scope")
+        }
         let response: StaticWorkerResponse
         if let manifest = options["--manifest"] {
             response = QualityCommands.staticEvidenceWorkerResponse(
@@ -1333,7 +1354,8 @@ do {
             response = QualityCommands.staticWorkerResponse(
                 profileURL: fileURL(profile),
                 policyURL: fileURL(policy),
-                repositoryRoot: fileURL(repositoryRoot)
+                repositoryRoot: fileURL(repositoryRoot),
+                scope: scope
             )
         }
         withExtendedLifetime(parentExitMonitor) {

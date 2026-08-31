@@ -89,6 +89,48 @@ struct StaticPolicyContractTests {
         )
     }
 
+    @Test("Schema version 2 static scans remain blocked by default")
+    func schemaV2StaticScanRequiresGraphByDefault() throws {
+        let profile = try makeSchemaV2ScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("struct SafeFixture {}".utf8), at: "repository/Sources/Safe.swift")
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile)
+        )
+
+        #expect(report.status.rawValue == QualityStatus.blocked.rawValue)
+        #expect(report.checks.contains {
+            $0.id == "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+                && $0.status == .blocked
+        })
+    }
+
+    @Test("Explicit source-path scope discloses missing Xcode membership and scans safely")
+    func schemaV2ExplicitSourcePathScopePasses() throws {
+        let profile = try makeSchemaV2ScanProfile()
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("struct SafeFixture {}".utf8), at: "repository/Sources/Safe.swift")
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            scope: .explicitSourcePaths
+        )
+
+        #expect(report.status.rawValue == QualityStatus.pass.rawValue)
+        #expect(report.checks.contains {
+            $0.id == "QC.STATIC.SCOPE"
+                && $0.status == .pass
+                && $0.message.contains("Xcode target membership is not asserted")
+        })
+        #expect(report.checks.contains { $0.id == "QC.STATIC.SCAN" && $0.status == .pass })
+        #expect(!report.checks.contains { $0.id == "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED" })
+    }
+
     @Test("A source scope with no regular files is blocked")
     func emptySourceScopeIsBlocked() throws {
         let profile = try makeScanProfile()
@@ -323,6 +365,51 @@ struct StaticPolicyContractTests {
                     "root": sandboxRoot.path,
                     "cache": sandboxRoot.appendingPathComponent("cache", isDirectory: true).path
                 ]
+            ]
+            return try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
+        })
+    }
+
+    private func makeSchemaV2ScanProfile() throws -> TemporaryProfile {
+        try TemporaryProfile(dataProvider: { _ in
+            let profile: [String: Any] = [
+                "schemaVersion": 2,
+                "project": ["kind": "xcodeproj", "path": "Safe.xcodeproj"],
+                "sourcePaths": ["Sources"],
+                "mode": "controlled",
+                "permissions": [
+                    "testCreation": "ask",
+                    "testModification": "ask",
+                    "localTestExecution": "ask",
+                    "githubExecution": "manual",
+                    "uiTests": "ask",
+                    "simulatorOrDevice": "ask",
+                    "performanceOrInstruments": "ask"
+                ],
+                "sandbox": ["root": ".quality-control", "cache": ".quality-control/cache"],
+                "engine": [
+                    "version": "0.1.0-dev",
+                    "revision": String(repeating: "a", count: 40)
+                ],
+                "xcode": [
+                    "sourceMembership": ["authority": "xcode-build-graph"],
+                    "schemes": [[
+                        "name": "Safe",
+                        "targets": ["Safe"],
+                        "configurations": ["Debug"],
+                        "destinations": ["platform=macOS"],
+                        "testPlans": []
+                    ]]
+                ],
+                "applicability": CapabilityID.allCases.map { capability in
+                    [
+                        "capability": capability.rawValue,
+                        "status": "notApplicable",
+                        "reason": "Synthetic static-scope fixture.",
+                        "owner": "Test",
+                        "revisitCondition": "Fixture changes."
+                    ]
+                }
             ]
             return try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
         })

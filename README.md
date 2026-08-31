@@ -93,6 +93,7 @@ swift run quality validate-profile --profile <profile.json>
 swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
+swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository> --scope explicit-source-paths
 quality mode-plan --profile <profile.json> --mode <static|build|build-and-tests|full>
 quality mode-execute --profile <profile.json> --mode <static|build|build-and-tests|full> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> [--scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>]
 quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex>
@@ -119,7 +120,10 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
   evidence boundaries exist. Child evidence remains attached to each step; the mode envelope never
   infers composite evidence or a trusted expectation.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
-  checks from explicit profile and policy inputs.
+  checks from explicit profile and policy inputs. Schema version 2 remains blocked by default until
+  Xcode build-graph membership is authenticated. The explicit `--scope explicit-source-paths`
+  variant scans only the profile's declared source paths and states that it does not assert Xcode
+  target membership; it cannot produce build or static-evidence proof.
 - `static-evidence` scans the asserted Git-tree manifest directly; it never scans mutable
   source-worktree bytes or projects Git paths onto a filesystem. `PASS` includes evidence and an empty-issue verifier result;
   the caller must build the pinned engine first and supply that exact executable's `codesign`
