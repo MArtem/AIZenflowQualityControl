@@ -70,6 +70,12 @@ ownership manifest. Runtime validation additionally enforces unique normalized p
 tree objects, UTF-8 content, exact SHA-256 bytes, one matching marker, and the immutable aggregate
 limits; schema-valid input alone is not ownership evidence.
 
+`deterministic-check-result.schema.json` also permits `QC.DEPENDENCY.LOCK_DRIFT`. The adapter reads
+only committed Git `HEAD`, validates supported `Package.resolved` shapes and immutable revisions,
+and compares external SwiftPM/Xcode package declarations with resolved pins. Missing locks for
+external declarations and unmatched pins are `FAIL`; malformed, unsupported, oversized, or
+non-immutable lock inputs are `BLOCKED`.
+
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.
 The envelope never infers a composite evidence claim; callers needing one must supply an explicit

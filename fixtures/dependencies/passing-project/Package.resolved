@@ -1,0 +1,14 @@
+{
+  "pins": [
+    {
+      "identity": "fixture-package",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/example/fixture-package.git",
+      "state": {
+        "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": "1.0.0"
+      }
+    }
+  ],
+  "version": 2
+}

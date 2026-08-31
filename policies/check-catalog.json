@@ -62,8 +62,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Regenerate and review the declared dependency lock from the approved toolchain.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/dependencies/passing-project/", "negative": "fixtures/dependencies/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.FORMAT.SWIFTFORMAT",
