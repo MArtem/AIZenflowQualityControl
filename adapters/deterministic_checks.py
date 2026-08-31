@@ -3,8 +3,8 @@
 
 The adapter reads only the authenticated Git HEAD of a clean checkout. It never writes the
 repository, never treats an unavailable adapter as PASS, and keeps the catalog as the policy
-authority. The initial adapter intentionally covers only high-confidence tracked credentials;
-broader secret heuristics require separate fixtures and review.
+authority. Each executable check has an explicit bounded contract and conservative failure
+semantics.
 """
 
 from __future__ import annotations
@@ -32,6 +32,11 @@ MAX_GENERATED_FILES = 256
 MAX_GENERATED_FILE_BYTES = 4 * 1024 * 1024
 MAX_GENERATED_TOTAL_BYTES = 16 * 1024 * 1024
 GENERATED_MANIFEST_PATH = ".quality-control/generated-files.json"
+MAX_DEPENDENCY_LOCKFILES = 64
+MAX_DEPENDENCY_LOCKFILE_BYTES = 1 * 1024 * 1024
+MAX_DEPENDENCY_PINS = 2_048
+MAX_DEPENDENCY_DECLARATIONS = 256
+MAX_DEPENDENCY_TEXT_BYTES = 1 * 1024 * 1024
 SECRET_PATH_SUFFIXES = (".p12", ".pfx", ".mobileprovision")
 SECRET_MARKER = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|"
@@ -50,6 +55,14 @@ GENERATED_MARKER = re.compile(
 GENERATOR_NAME = re.compile(r"[A-Za-z0-9._/-]{1,128}")
 GENERATOR_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+/-]{0,127}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+GIT_REVISION = re.compile(r"[0-9a-f]{40}")
+PACKAGE_URL_DECLARATION = re.compile(
+    r"\.package\s*\([^)]{0,4096}?\burl\s*:\s*\"(?P<location>[^\"]+)\"",
+    re.DOTALL,
+)
+PBX_PACKAGE_URL_DECLARATION = re.compile(
+    r"\brepositoryURL\s*=\s*\"(?P<location>[^\"]+)\"\s*;"
+)
 
 
 class AdapterError(ValueError):
@@ -229,6 +242,166 @@ def findings_for_todo_owner(root: Path) -> list[dict[str, str]]:
                 "path": parts[1][:MAX_STRING_LENGTH],
                 "message": "TODO/FIXME must include owner, ticket/issue, and YYYY-MM-DD expiry metadata.",
             })
+    return findings
+
+
+def normalized_dependency_identity(value: str) -> str:
+    candidate = value.strip().split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    candidate = candidate.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    if candidate.lower().endswith(".git"):
+        candidate = candidate[:-4]
+    candidate = candidate.lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", candidate):
+        return ""
+    return candidate
+
+
+def normalized_dependency_location(value: str) -> str:
+    candidate = value.strip().split("?", 1)[0].split("#", 1)[0].rstrip("/").lower()
+    if candidate.endswith(".git"):
+        candidate = candidate[:-4]
+    return candidate
+
+
+def parse_dependency_json(data: bytes, label: str) -> Any:
+    if len(data) > MAX_DEPENDENCY_LOCKFILE_BYTES:
+        raise AdapterError(f"{label} exceeds the immutable byte limit")
+    try:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError, AdapterError) as error:
+        raise AdapterError(f"{label} is malformed: {error}") from error
+
+
+def dependency_lock_paths(paths: list[str]) -> list[str]:
+    locks = sorted(path for path in paths if Path(path).name == "Package.resolved")
+    if len(locks) > MAX_DEPENDENCY_LOCKFILES:
+        raise AdapterError("tracked Package.resolved files exceed the immutable file limit")
+    return locks
+
+
+def external_dependency_declarations(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    declarations: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for path in paths:
+        if not (path.endswith("Package.swift") or path.endswith(".pbxproj")):
+            continue
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_DEPENDENCY_TEXT_BYTES)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"dependency declaration must be UTF-8 text: {path}") from error
+        matcher = PACKAGE_URL_DECLARATION if path.endswith("Package.swift") else PBX_PACKAGE_URL_DECLARATION
+        for match in matcher.finditer(text):
+            location = match.group("location").strip()
+            identity = normalized_dependency_identity(location)
+            if not identity or not location or any(character.isspace() for character in location):
+                raise AdapterError(f"dependency declaration has an invalid location: {path}")
+            key = (path, normalized_dependency_location(location))
+            if key in seen:
+                continue
+            seen.add(key)
+            declarations.append({"path": path, "identity": identity, "location": location})
+            if len(declarations) > MAX_DEPENDENCY_DECLARATIONS:
+                raise AdapterError("external dependency declarations exceed the immutable limit")
+    return declarations
+
+
+def normalized_lock_pins(data: bytes, path: str) -> list[dict[str, str]]:
+    value = parse_dependency_json(data, path)
+    if not isinstance(value, dict) or type(value.get("version")) is not int:
+        raise AdapterError(f"{path} has an unsupported Package.resolved shape")
+    version = value["version"]
+    if version == 1:
+        if set(value) != {"object", "version"} or not isinstance(value["object"], dict):
+            raise AdapterError(f"{path} has an unsupported Package.resolved v1 shape")
+        if set(value["object"]) != {"pins"}:
+            raise AdapterError(f"{path} has an unsupported Package.resolved v1 object")
+        if "pins" not in value["object"]:
+            raise AdapterError(f"{path} is missing Package.resolved pins")
+        pins = value["object"]["pins"]
+        pin_shape = "v1"
+    elif version in {2, 3}:
+        allowed = {"pins", "version"} if version == 2 else {"originHash", "pins", "version"}
+        if set(value) != allowed:
+            raise AdapterError(f"{path} has an unsupported Package.resolved v{version} shape")
+        if version == 3 and (not isinstance(value.get("originHash"), str) or not value["originHash"].strip()):
+            raise AdapterError(f"{path} has an invalid Package.resolved originHash")
+        if "pins" not in value:
+            raise AdapterError(f"{path} is missing Package.resolved pins")
+        pins = value["pins"]
+        pin_shape = "v2+"
+    else:
+        raise AdapterError(f"{path} uses an unsupported Package.resolved version")
+    if not isinstance(pins, list) or len(pins) > MAX_DEPENDENCY_PINS:
+        raise AdapterError(f"{path} exceeds the immutable pin limit")
+
+    normalized: list[dict[str, str]] = []
+    seen_identities: set[str] = set()
+    for index, pin in enumerate(pins):
+        if not isinstance(pin, dict):
+            raise AdapterError(f"{path} pin {index} is not an object")
+        if pin_shape == "v1":
+            if set(pin) != {"package", "repositoryURL", "state"}:
+                raise AdapterError(f"{path} pin {index} has an unsupported v1 shape")
+            raw_identity = pin["package"]
+            raw_location = pin["repositoryURL"]
+        else:
+            if set(pin) != {"identity", "kind", "location", "state"}:
+                raise AdapterError(f"{path} pin {index} has an unsupported shape")
+            raw_identity = pin["identity"]
+            raw_location = pin["location"]
+            if not isinstance(pin["kind"], str) or not pin["kind"].strip():
+                raise AdapterError(f"{path} pin {index} has an invalid kind")
+        if not isinstance(raw_identity, str) or not isinstance(raw_location, str):
+            raise AdapterError(f"{path} pin {index} has an invalid identity or location")
+        identity = normalized_dependency_identity(raw_identity)
+        location = normalized_dependency_location(raw_location)
+        if not identity or not location or any(character.isspace() for character in raw_location):
+            raise AdapterError(f"{path} pin {index} has an invalid identity or location")
+        state = pin["state"]
+        if not isinstance(state, dict) or set(state) - {"branch", "revision", "version"}:
+            raise AdapterError(f"{path} pin {index} has an unsupported state shape")
+        revision = state.get("revision")
+        if not isinstance(revision, str) or not GIT_REVISION.fullmatch(revision):
+            raise AdapterError(f"{path} pin {index} has no immutable lowercase revision")
+        for key in ("branch", "version"):
+            if key in state and state[key] is not None and (
+                not isinstance(state[key], str) or not state[key].strip()
+            ):
+                raise AdapterError(f"{path} pin {index} has an invalid {key} state")
+        if identity in seen_identities:
+            raise AdapterError(f"{path} contains duplicate dependency identity: {identity}")
+        seen_identities.add(identity)
+        normalized.append({"identity": identity, "location": location})
+    return normalized
+
+
+def findings_for_dependency_lock_drift(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    lock_paths = dependency_lock_paths(paths)
+    declarations = external_dependency_declarations(root, paths)
+    pins: list[dict[str, str]] = []
+    for path in lock_paths:
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_DEPENDENCY_LOCKFILE_BYTES)
+        for pin in normalized_lock_pins(data, path):
+            pins.append({**pin, "path": path})
+
+    findings: list[dict[str, str]] = []
+    if declarations and not lock_paths:
+        for declaration in declarations[:MAX_FINDINGS]:
+            findings.append({
+                "path": declaration["path"],
+                "message": "External Swift package declaration has no tracked Package.resolved lockfile.",
+            })
+        return findings
+    for declaration in declarations:
+        location = normalized_dependency_location(declaration["location"])
+        if not any(pin["identity"] == declaration["identity"] or pin["location"] == location for pin in pins):
+            findings.append({
+                "path": declaration["path"],
+                "message": "External dependency declaration has no matching immutable Package.resolved pin.",
+            })
+            if len(findings) >= MAX_FINDINGS:
+                break
     return findings
 
 
@@ -427,6 +600,26 @@ def main() -> int:
                 revision,
                 "PASS",
                 "All declared generated files have reproducible ownership markers and matching hashes.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.DEPENDENCY.LOCK_DRIFT":
+            findings = findings_for_dependency_lock_drift(root, paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Dependency declarations and lockfiles are inconsistent.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "Tracked dependency lockfiles are valid and match external declarations.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0

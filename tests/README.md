@@ -72,3 +72,7 @@ The Python deterministic adapter contracts are exercised separately:
 ```bash
 TMPDIR=<task-local-runtime-directory> python3 -m unittest discover -s tests -p 'deterministic_checks_test.py'
 ```
+
+The dependency lock-drift tests cover local-only package applicability, matching SwiftPM v2 and
+Xcode package declarations, missing or unmatched locks, v1/v3 compatibility, and malformed,
+duplicate, or non-immutable pins. They never run package resolution or mutate a source checkout.

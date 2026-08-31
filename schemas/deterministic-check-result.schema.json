@@ -16,7 +16,7 @@
         "type": "object", "additionalProperties": false,
         "required": ["id", "status", "message"],
         "properties": {
-          "id": {"enum": ["QC.SECRETS.TRACKED", "QC.TODO.OWNER", "QC.GENERATED.OWNERSHIP"]},
+          "id": {"enum": ["QC.SECRETS.TRACKED", "QC.TODO.OWNER", "QC.GENERATED.OWNERSHIP", "QC.DEPENDENCY.LOCK_DRIFT"]},
           "status": {"enum": ["PASS", "FAIL", "BLOCKED"]},
           "message": {"type": "string", "minLength": 1, "maxLength": 1024},
           "findings": {

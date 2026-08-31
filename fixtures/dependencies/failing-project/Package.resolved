@@ -1,0 +1,14 @@
+{
+  "pins": [
+    {
+      "identity": "different-package",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/example/different-package.git",
+      "state": {
+        "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "1.0.0"
+      }
+    }
+  ],
+  "version": 2
+}

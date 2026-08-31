@@ -23,3 +23,9 @@ generator/version pair, and exactly one `@generated-by generator=<name> version=
 Text files carrying that marker but absent from the manifest fail; filenames alone are never treated
 as evidence of generated output. Missing or malformed manifests, traversal, symlinks, unsupported
 objects, and immutable byte/file limits are `BLOCKED`, never `PASS`.
+
+`QC.DEPENDENCY.LOCK_DRIFT` is an executable, repository-neutral adapter. It validates tracked
+`Package.resolved` files in SwiftPM v1/v2/v3 shapes, requires lowercase immutable revisions and
+unique identities, and matches external `.package(url:)` or Xcode `repositoryURL` declarations to
+the resolved pins. Local-only packages with no external declarations may omit a lockfile; malformed
+or unsupported lockfiles are `BLOCKED`, while missing or unmatched external pins are `FAIL`.

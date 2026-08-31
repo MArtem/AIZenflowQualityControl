@@ -30,6 +30,12 @@ Any marker-bearing tracked file absent from the manifest is a finding. The adapt
 generated status from filenames, does not execute generators, and treats malformed manifests,
 symlinks, unsupported files, and resource-limit exhaustion as `BLOCKED`.
 
+`QC.DEPENDENCY.LOCK_DRIFT` validates committed SwiftPM resolution. It supports Package.resolved
+versions 1, 2, and 3, requires a lowercase 40-character revision for every pin, rejects duplicate
+identities and malformed/unsupported shapes, and matches external Package.swift `.package(url:)`
+and Xcode project `repositoryURL` declarations. A repository with only local package references
+may omit Package.resolved; an external declaration without a tracked matching lock pin is `FAIL`.
+
 Example:
 
 ```sh
@@ -44,6 +50,13 @@ python3 adapters/deterministic_checks.py \
   --repository-root <repository> \
   --catalog policies/check-catalog.json \
   --check QC.GENERATED.OWNERSHIP
+```
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.DEPENDENCY.LOCK_DRIFT
 ```
 
 The JSON result follows `schemas/deterministic-check-result.schema.json`. This adapter is a local
