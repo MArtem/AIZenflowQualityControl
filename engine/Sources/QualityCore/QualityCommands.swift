@@ -7,6 +7,16 @@ public enum QualityStatus: String, Codable, Sendable {
     case blocked = "BLOCKED"
 }
 
+/// Defines whether a static scan may run without authoritative Xcode source-membership evidence.
+///
+/// The default keeps schemaVersion 2 profiles blocked until build-graph evidence is available.
+/// `explicit-source-paths` is an intentionally narrower, caller-selected scan that reports only
+/// the configured source roots and never claims Xcode target membership.
+public enum StaticScanScope: String, Equatable, Sendable {
+    case xcodeBuildGraph = "xcode-build-graph"
+    case explicitSourcePaths = "explicit-source-paths"
+}
+
 public struct QualityCheck: Codable, Sendable {
     public let id: String
     public let status: QualityStatus
@@ -326,6 +336,41 @@ struct StaticScanDocuments {
 }
 
 public enum QualityCommands {
+    public static func modePlan(at profileURL: URL, mode: QualityMode) -> QualityModePlan {
+        switch loadProfile(at: profileURL) {
+        case let .failure(check):
+            return QualityModePlan(
+                mode: mode,
+                steps: [QualityModeStep(
+                    id: check.id,
+                    command: "validate-profile",
+                    status: .blocked,
+                    applicability: "unknown",
+                    remediation: check.message
+                )]
+            )
+        case let .success(profile):
+            let contractIssues = ProfileValidator.validate(profile).filter {
+                $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+            }
+            guard contractIssues.isEmpty else {
+                return QualityModePlan(
+                    mode: mode,
+                    steps: contractIssues.map {
+                        QualityModeStep(
+                            id: $0.code,
+                            command: "validate-profile",
+                            status: .blocked,
+                            applicability: "unknown",
+                            remediation: $0.message
+                        )
+                    }
+                )
+            }
+            return QualityModePlanner.plan(profile: profile, mode: mode)
+        }
+    }
+
     public static func validateEvidenceExpectation(at expectationURL: URL) -> QualityReport {
         do {
             _ = try EvidenceExpectationDocumentLoader.load(from: expectationURL)
@@ -382,8 +427,11 @@ public enum QualityCommands {
             return QualityReport(command: "doctor", checks: [check])
         case let .success(profile):
             let issues = ProfileValidator.validate(profile)
-            guard issues.isEmpty else {
-                return QualityReport(command: "doctor", checks: checks(for: issues))
+            let contractIssues = issues.filter {
+                $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+            }
+            guard contractIssues.isEmpty else {
+                return QualityReport(command: "doctor", checks: checks(for: contractIssues))
             }
 
             var checks: [QualityCheck] = [
@@ -470,7 +518,22 @@ public enum QualityCommands {
                 }
             }
 
-            let sandboxRootURL = URL(fileURLWithPath: profile.sandbox.root)
+            guard let sandboxPaths = ProfileValidator.resolveSandboxPaths(
+                for: profile,
+                under: repositoryRoot
+            ) else {
+                checks.append(
+                    QualityCheck(
+                        id: "QC.DOCTOR.SANDBOX_PATH_RESOLUTION",
+                        status: .fail,
+                        message: "Configured sandbox paths could not be resolved safely.",
+                        path: "sandbox"
+                    )
+                )
+                return QualityReport(command: "doctor", checks: checks)
+            }
+
+            let sandboxRootURL = sandboxPaths.root
             let sandboxRootCheck = directoryCheck(
                 id: "QC.DOCTOR.SANDBOX_ROOT",
                 url: sandboxRootURL,
@@ -479,7 +542,18 @@ public enum QualityCommands {
             )
             checks.append(sandboxRootCheck)
 
-            let sandboxCacheURL = URL(fileURLWithPath: profile.sandbox.cache)
+            if profile.schemaVersion == 2, sandboxRootCheck.status == .pass {
+                checks.append(
+                    repositoryBoundaryCheck(
+                        id: "QC.DOCTOR.SANDBOX_ROOT_BOUNDARY",
+                        url: sandboxRootURL,
+                        repositoryRoot: repositoryRoot,
+                        relativePath: profile.sandbox.root
+                    )
+                )
+            }
+
+            let sandboxCacheURL = sandboxPaths.cache
             let sandboxCacheCheck = directoryCheck(
                 id: "QC.DOCTOR.SANDBOX_CACHE",
                 url: sandboxCacheURL,
@@ -506,6 +580,23 @@ public enum QualityCommands {
                 )
             }
 
+            if profile.schemaVersion == 2 {
+                if checks.allSatisfy({ $0.status == .pass }) {
+                    checks.append(contentsOf: XcodeGraphDiscovery.checks(
+                        profile: profile,
+                        repositoryRoot: repositoryRoot
+                    ))
+                } else {
+                    checks.append(
+                        QualityCheck(
+                            id: "QC.DOCTOR.XCODE_GRAPH_PREREQUISITES",
+                            status: .blocked,
+                            message: "Xcode graph discovery requires valid repository, project, source, and sandbox boundaries."
+                        )
+                    )
+                }
+            }
+
             return QualityReport(command: "doctor", checks: checks)
         }
     }
@@ -513,7 +604,8 @@ public enum QualityCommands {
     public static func staticScan(
         profileURL: URL,
         policyURL: URL,
-        repositoryRoot: URL
+        repositoryRoot: URL,
+        scope: StaticScanScope = .xcodeBuildGraph
     ) -> QualityReport {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
@@ -522,6 +614,7 @@ public enum QualityCommands {
             profileURL: profileURL,
             policyURL: policyURL,
             repositoryRoot: repositoryRoot,
+            scope: scope,
             documents: nil,
             limits: .production,
             deadlineExceeded: { _, _ in clock.now >= deadline }
@@ -531,7 +624,8 @@ public enum QualityCommands {
     package static func staticWorkerResponse(
         profileURL: URL,
         policyURL: URL,
-        repositoryRoot: URL
+        repositoryRoot: URL,
+        scope: StaticScanScope = .xcodeBuildGraph
     ) -> StaticWorkerResponse {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: StaticScanTimeouts.production)
@@ -545,6 +639,7 @@ public enum QualityCommands {
             profileURL: profileURL,
             policyURL: policyURL,
             repositoryRoot: repositoryRoot,
+            scope: scope,
             documents: documents,
             limits: .production,
             deadlineExceeded: { _, _ in clock.now >= deadline }
@@ -557,10 +652,50 @@ public enum QualityCommands {
         )
     }
 
+    package static func staticEvidenceWorkerResponse(
+        profileData: Data,
+        policyData: Data,
+        manifestData: Data
+    ) -> StaticWorkerResponse {
+        let profileDigest = SHA256.hash(data: profileData).map { String(format: "%02x", $0) }.joined()
+        let policyDigest = SHA256.hash(data: policyData).map { String(format: "%02x", $0) }.joined()
+        let manifestDigest = SHA256.hash(data: manifestData).map { String(format: "%02x", $0) }.joined()
+        do {
+            let profile = try ProfileLoader.decodeProfile(from: profileData)
+            let profileChecks = checks(for: ProfileValidator.validate(profile))
+            guard profileChecks.isEmpty else {
+                return StaticWorkerResponse(report: QualityReport(command: "static", checks: profileChecks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
+            }
+            let policy = try StaticPolicy.decode(from: policyData)
+            let policyChecks = policy.validationChecks()
+            guard !policyChecks.contains(where: { $0.status != .pass }) else {
+                return StaticWorkerResponse(report: QualityReport(command: "static", checks: policyChecks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
+            }
+            let snapshot = try GitTreeStaticSnapshot(manifest: manifestData)
+            let checks = [
+                QualityCheck(id: "QC.PROFILE.CONTRACT", status: .pass, message: "Project profile contract is valid.")
+            ] + policyChecks + snapshot.staticChecks(
+                sourcePaths: profile.sourcePaths,
+                maximumFileBytes: policy.maximumFileBytes,
+                excludedDirectoryNames: Set(policy.excludedDirectoryNames),
+                forbiddenFileSuffixes: policy.forbiddenFileSuffixes
+            )
+            return StaticWorkerResponse(report: QualityReport(command: "static", checks: checks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
+        } catch {
+            return StaticWorkerResponse(
+                report: QualityReport(command: "static", checks: [QualityCheck(id: "QC.STATIC.MANIFEST_UNREADABLE", status: .blocked, message: "Exact source Git-tree manifest could not be decoded.")]),
+                profileSHA256: profileDigest,
+                policySHA256: policyDigest,
+                sourceManifestSHA256: manifestDigest
+            )
+        }
+    }
+
     static func staticScan(
         profileURL: URL,
         policyURL: URL,
         repositoryRoot: URL,
+        scope: StaticScanScope = .xcodeBuildGraph,
         documents: StaticScanDocuments? = nil,
         limits: StaticScanLimits,
         deadlineExceeded: (_ scannedEntries: Int, _ reportedFindings: Int) -> Bool = { _, _ in false }
@@ -570,8 +705,12 @@ public enum QualityCommands {
             return QualityReport(command: "static", checks: [check])
         case let .success(profile):
             let profileIssues = ProfileValidator.validate(profile)
-            guard profileIssues.isEmpty else {
-                return QualityReport(command: "static", checks: checks(for: profileIssues))
+            let blockingProfileIssues = profileIssues.filter {
+                scope != .explicitSourcePaths
+                    || $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+            }
+            guard blockingProfileIssues.isEmpty else {
+                return QualityReport(command: "static", checks: checks(for: blockingProfileIssues))
             }
 
             let policy: StaticPolicy
@@ -611,6 +750,16 @@ public enum QualityCommands {
                     message: "Project profile contract is valid."
                 )
             ] + policyChecks
+
+            if scope == .explicitSourcePaths {
+                checks.append(
+                    QualityCheck(
+                        id: "QC.STATIC.SCOPE",
+                        status: .pass,
+                        message: "Static scan is limited to the profile sourcePaths; Xcode target membership is not asserted."
+                    )
+                )
+            }
 
             let rootCheck = directoryCheck(
                 id: "QC.STATIC.REPOSITORY_ROOT",
@@ -1117,7 +1266,9 @@ public enum QualityCommands {
         issues.map {
             QualityCheck(
                 id: $0.code,
-                status: .fail,
+                status: $0.code == "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
+                    ? .blocked
+                    : .fail,
                 message: $0.message,
                 path: $0.path
             )

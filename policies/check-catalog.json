@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "1.0.0",
+  "checks": [
+    {
+      "id": "QC.PROFILE.CONTRACT",
+      "scope": "Project profile schema, permissions, applicability, and normalized sandbox paths",
+      "severity": "block",
+      "applicability": "always",
+      "remediation": "Fix the profile contract before running any quality mode.",
+      "fixture": { "positive": "fixtures/profiles/valid-minimal.json", "negative": "fixtures/profiles/invalid-path-traversal.json" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.STATIC.SOURCE_BOUNDARY",
+      "scope": "Declared source roots, Git-tree membership, traversal, and symlink escape",
+      "severity": "block",
+      "applicability": "always",
+      "remediation": "Keep every scanned source inside the authenticated declared source scope.",
+      "fixture": { "positive": "fixtures/profiles/valid-minimal.json", "negative": "fixtures/profiles/invalid-path-traversal.json" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.STATIC.FORBIDDEN_ARTIFACT",
+      "scope": "Tracked build outputs and forbidden artifact suffixes",
+      "severity": "block",
+      "applicability": "always",
+      "remediation": "Remove generated build artifacts from the source checkout.",
+      "fixture": { "positive": "fixtures/policies/deliberate-failure-static-policy.json", "negative": "fixtures/policies/deliberate-failure-static-policy.json" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.BUILD.MEMBERSHIP",
+      "scope": "Compiler source membership in the authoritative Xcode build graph",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Make every compiled first-party source traceable to the declared Xcode graph.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.BUILD.FIRST_PARTY_WARNINGS",
+      "scope": "New first-party compiler warnings in the selected build",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Resolve new first-party warnings or record an approved bounded exception.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.CONCURRENCY.DIAGNOSTICS",
+      "scope": "Swift concurrency diagnostics and strict isolation violations",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Resolve compiler concurrency diagnostics at the correct actor or Sendable boundary.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.DEPENDENCY.LOCK_DRIFT",
+      "scope": "Swift package and resolved dependency lock drift",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Regenerate and review the declared dependency lock from the approved toolchain.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.FORMAT.SWIFTFORMAT",
+      "scope": "Pinned SwiftFormat check-only output",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Run the pinned formatter locally and commit the resulting formatting changes.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.LINT.SWIFTLINT",
+      "scope": "Pinned SwiftLint rules and custom deterministic violations",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Resolve lint errors using the repository-pinned SwiftLint configuration.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.SECRETS.TRACKED",
+      "scope": "Tracked secrets, private keys, and credential-shaped material",
+      "severity": "block",
+      "applicability": "always",
+      "remediation": "Remove secrets, rotate exposed credentials, and use approved secret storage.",
+      "fixture": { "positive": "fixtures/secrets/passing-project/", "negative": "fixtures/secrets/failing-project/" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.GENERATED.OWNERSHIP",
+      "scope": "Generated files and reproducible ownership markers",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Regenerate owned artifacts from the pinned generator or remove unowned output.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.LOCALIZATION.CATALOG",
+      "scope": "Localized key parity, format validity, and fallback coverage",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Synchronize localization keys and validate every localized resource format.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.RESOURCES.ASSETS",
+      "scope": "Asset catalogs, resource references, and forbidden binary outputs",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Fix missing, duplicate, invalid, or unowned resources before merging.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.PRIVACY.MANIFEST",
+      "scope": "Privacy manifest, required-reason API, and declared data lifecycle alignment",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Reconcile privacy manifests, labels, required-reason APIs, and data handling.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.CONFIGURATION.SIGNING",
+      "scope": "Configuration, entitlements, signing, and release-sensitive file changes",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Review configuration and signing changes against the authorized release profile.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.TESTS.DISABLED",
+      "scope": "Disabled, skipped, or unbound tests in an applicable test target",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Restore the test or record an explicit applicability decision and owner.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "staged"
+    },
+    {
+      "id": "QC.TODO.OWNER",
+      "scope": "Tracked TODO/FIXME markers without owner, ticket, or expiry",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Link the marker to an owner and ticket with a bounded expiry, or resolve it.",
+      "fixture": { "positive": "fixtures/todo/passing-project/", "negative": "fixtures/todo/failing-project/" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.ARCHITECTURE.REVIEW_CANDIDATE",
+      "scope": "Architecture direction, literal policy, complexity, and possible god-object signals",
+      "severity": "review",
+      "applicability": "manual",
+      "remediation": "Review the signal in context; do not convert it to a blocking rule without a project contract.",
+      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "implementation": "review-candidate"
+    }
+  ]
+}

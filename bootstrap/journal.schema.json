@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/bootstrap/journal.schema.json",
+  "title": "AIZenflow Bootstrap Apply Journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "command", "planSHA256", "entries", "directories"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "command": { "const": "apply-journal" },
+    "planSHA256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "entries": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "destination", "createdSHA256"],
+        "properties": {
+          "id": { "$ref": "#/$defs/pathString" },
+          "destination": { "$ref": "#/$defs/repositoryRelativePath" },
+          "createdSHA256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "directories": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/repositoryRelativePath" }
+    }
+  },
+  "$defs": {
+    "pathString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!\\s*$).+"
+    },
+    "repositoryRelativePath": {
+      "$ref": "#/$defs/pathString",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//).+"
+    }
+  }
+}

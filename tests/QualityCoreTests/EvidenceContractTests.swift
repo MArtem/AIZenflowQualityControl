@@ -35,6 +35,7 @@ struct EvidenceContractTests {
         arguments: [
             (PermissionAction.testCreation, PermissionRequirement.authorizedByProfile),
             (.testModification, .prohibited),
+            (.localBuildExecution, .userAuthorizationRequired),
             (.localTestExecution, .userAuthorizationRequired),
             (.githubExecution, .userAuthorizationRequired),
             (.uiTests, .authorizedByProfile),
@@ -57,11 +58,128 @@ struct EvidenceContractTests {
         #expect(result.issues.isEmpty)
     }
 
+    @Test("Aggregated evidence verifies only when child identities and expectations agree")
+    func aggregateEvidenceUsesOneTrustedIdentity() {
+        let staticEvidence = validEvidence()
+        let buildEvidence = validEvidence(
+            commands: [
+                EvidenceCommand(
+                    id: "xcode-build",
+                    commandSHA256: testsCommandHash,
+                    exitCode: 0
+                )
+            ],
+            gates: [
+                EvidenceGate(
+                    id: "QC.BUILD",
+                    status: .pass,
+                    message: "Build passed.",
+                    commandID: "xcode-build"
+                )
+            ],
+            artifacts: []
+        )
+        let result = EvidenceVerifier.aggregate(
+            [staticEvidence, buildEvidence],
+            expected: expectation(
+                commands: [
+                    "static": EvidenceCommandExpectation(
+                        commandSHA256: staticCommandHash,
+                        exitCode: 0
+                    ),
+                    "xcode-build": EvidenceCommandExpectation(
+                        commandSHA256: testsCommandHash,
+                        exitCode: 0
+                    )
+                ],
+                gates: [
+                    "QC.STATIC": EvidenceGateExpectation(
+                        commandID: "static",
+                        status: .pass,
+                        message: "Static checks passed."
+                    ),
+                    "QC.BUILD": EvidenceGateExpectation(
+                        commandID: "xcode-build",
+                        status: .pass,
+                        message: "Build passed."
+                    )
+                ]
+            )
+        )
+
+        #expect(result.verification.verdict == .ready)
+        #expect(result.verification.issues.isEmpty)
+        #expect(result.evidence?.commands.map(\.id) == ["static", "xcode-build"])
+    }
+
+    @Test("Aggregation rejects mixed source identities before merging gates")
+    func aggregateEvidenceRejectsMixedIdentity() {
+        let result = EvidenceVerifier.aggregate(
+            [
+                validEvidence(),
+                validEvidence(sourceRevision: String(repeating: "e", count: 40))
+            ],
+            expected: expectation()
+        )
+
+        #expect(result.evidence == nil)
+        #expect(result.verification.verdict == .bypassed)
+        #expect(result.verification.issues.map(\.code).contains("QC.EVIDENCE.AGGREGATION_IDENTITY_MISMATCH"))
+    }
+
+    @Test("Aggregation rejects empty and oversized input without producing evidence")
+    func aggregateEvidenceBoundsInputs() {
+        let empty = EvidenceVerifier.aggregate([], expected: expectation())
+        let oversized = EvidenceVerifier.aggregate(
+            Array(repeating: validEvidence(), count: 65),
+            expected: expectation()
+        )
+
+        #expect(empty.evidence == nil)
+        #expect(empty.verification.verdict == .bypassed)
+        #expect(empty.verification.issues.map(\.code).contains("QC.EVIDENCE.AGGREGATION_EMPTY"))
+        #expect(oversized.evidence == nil)
+        #expect(oversized.verification.verdict == .bypassed)
+        #expect(oversized.verification.issues.map(\.code).contains("QC.EVIDENCE.AGGREGATION_LIMIT"))
+    }
+
+    @Test("Trusted aggregate expectations round-trip through a strict loader")
+    func trustedExpectationRoundTrip() throws {
+        let encoded = try JSONEncoder().encode(expectation())
+        let decoded = try TrustedEvidenceExpectationLoader.decode(encoded)
+
+        #expect(decoded.sourceRepository == "MArtem/AIZenflowQualityControl")
+        #expect(decoded.commandsByID["static"]?.commandSHA256 == staticCommandHash)
+        #expect(decoded.gatesByID["QC.STATIC"]?.status == .pass)
+
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object["unexpected"] = true
+        let invalid = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        #expect(throws: DecodingError.self) {
+            try TrustedEvidenceExpectationLoader.decode(invalid)
+        }
+    }
+
+    @Test("Aggregate execution blocks an empty receipt list")
+    func aggregateExecutionRequiresReceipts() {
+        let result = EvidenceAggregationCommands.execute(
+            evidenceURLs: [],
+            expectationURL: URL(fileURLWithPath: "/does/not/exist.json")
+        )
+
+        #expect(result.status == .blocked)
+        #expect(result.report.checks.first?.id == "QC.EVIDENCE.AGGREGATION.EMPTY_INPUTS")
+        #expect(result.evidence == nil)
+        #expect(result.verification == nil)
+    }
+
     @Test("Unsupported profile schema versions are BYPASSED")
     func unsupportedProfileSchemaVersionIsBypassed() {
         let result = EvidenceVerifier.verify(
-            validEvidence(profileSchemaVersion: 2),
-            expected: expectation(profileSchemaVersion: 2)
+            validEvidence(profileSchemaVersion: 3),
+            expected: expectation(profileSchemaVersion: 3)
         )
 
         #expect(result.verdict == .bypassed)
@@ -949,6 +1067,32 @@ struct EvidenceContractTests {
         #expect(command["commandSHA256"] as? String == staticCommandHash)
     }
 
+    @Test("Public execution receipts decode only their nested evidence")
+    func evidenceReceiptRoundTrip() throws {
+        let evidenceData = try JSONEncoder().encode(validEvidence())
+        let evidenceObject = try #require(
+            try JSONSerialization.jsonObject(with: evidenceData) as? [String: Any]
+        )
+        let receipt: [String: Any] = [
+            "command": "static-evidence",
+            "evidence": evidenceObject,
+            "report": [
+                "command": "static",
+                "schemaVersion": 1,
+                "status": "PASS",
+                "checks": []
+            ],
+            "schemaVersion": 1,
+            "status": "PASS",
+            "verification": ["verdict": "READY", "issues": []]
+        ]
+        let receiptData = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+        let decoded = try EvidenceReceiptLoader.decode(receiptData)
+
+        #expect(decoded.sourceRevision == sourceRevision)
+        #expect(decoded.claimedVerdict == .ready)
+    }
+
     @Test("Evidence loader rejects schema-invalid properties, null optionals, and duplicate keys")
     func strictEvidenceDecodingRejectsSchemaInvalidJSON() throws {
         let encoded = try JSONEncoder().encode(validEvidence())
@@ -1084,6 +1228,7 @@ struct EvidenceContractTests {
         let commandCollection = try #require(properties["commands"] as? [String: Any])
         let commandSchema = try #require(commandCollection["items"] as? [String: Any])
         let commandProperties = try #require(commandSchema["properties"] as? [String: Any])
+        let commandActions = try #require(commandProperties["actions"] as? [String: Any])
         let commandRequired = try #require(commandSchema["required"] as? [String])
         let commandConditions = try #require(commandSchema["allOf"] as? [[String: Any]])
         #expect(commandProperties["commandLine"] == nil)
@@ -1092,6 +1237,11 @@ struct EvidenceContractTests {
         #expect(commandCollection["minItems"] == nil)
         #expect(commandCollection["uniqueItems"] as? Bool == true)
         #expect(commandConditions.count == 2)
+        #expect(commandActions["maxItems"] as? Int == PermissionAction.allCases.count)
+
+        let permissionAction = try #require(definitions["permissionAction"] as? [String: Any])
+        let permissionActionValues = try #require(permissionAction["enum"] as? [String])
+        #expect(Set(permissionActionValues) == Set(PermissionAction.allCases.map(\.rawValue)))
 
         let actionlessIf = try #require(commandConditions[0]["if"] as? [String: Any])
         let actionlessProperties = try #require(actionlessIf["properties"] as? [String: Any])
@@ -1176,7 +1326,7 @@ struct EvidenceContractTests {
         let profileSchemaVersion = try #require(
             properties["profileSchemaVersion"] as? [String: Any]
         )
-        #expect(profileSchemaVersion["const"] as? Int == 1)
+        #expect(Set(profileSchemaVersion["enum"] as? [Int] ?? []) == Set([1, 2]))
 
         let residualRisks = try #require(properties["residualRisks"] as? [String: Any])
         let artifacts = try #require(properties["artifacts"] as? [String: Any])
@@ -1237,6 +1387,7 @@ struct EvidenceContractTests {
     }
 
     private func validEvidence(
+        sourceRevision: String? = nil,
         profileSchemaVersion: Int = 1,
         permissions: PermissionPolicy? = nil,
         commands: [EvidenceCommand]? = nil,
@@ -1249,7 +1400,7 @@ struct EvidenceContractTests {
     ) -> QualityEvidence {
         QualityEvidence(
             sourceRepository: "MArtem/AIZenflowQualityControl",
-            sourceRevision: sourceRevision,
+            sourceRevision: sourceRevision ?? self.sourceRevision,
             engineVersion: "0.1.0",
             engineRevision: engineRevision,
             profileSchemaVersion: profileSchemaVersion,

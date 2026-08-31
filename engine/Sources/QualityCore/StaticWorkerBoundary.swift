@@ -93,7 +93,8 @@ package enum BoundedProcessRunner {
     package static func run(
         _ process: Process,
         timeoutSeconds: TimeInterval,
-        maximumOutputBytes: Int
+        maximumOutputBytes: Int,
+        validateLaunchedProcess: @Sendable (pid_t) -> Bool = { _ in true }
     ) throws -> BoundedProcessResult {
         precondition(
             timeoutSeconds.isFinite && timeoutSeconds > 0 && timeoutSeconds <= 3_600
@@ -111,6 +112,11 @@ package enum BoundedProcessRunner {
         }
 
         try process.run()
+        guard validateLaunchedProcess(process.processIdentifier) else {
+            terminateBoundedly(process, processTerminated: processTerminated)
+            outputPipe.fileHandleForReading.closeFile()
+            throw BoundedProcessRunnerError.identityRejected
+        }
 
         DispatchQueue.global(qos: .utility).async {
             do {
@@ -129,16 +135,7 @@ package enum BoundedProcessRunner {
         ) == .timedOut
 
         if timedOut {
-            process.terminate()
-            if processTerminated.wait(
-                timeout: deadline(after: terminationGraceSeconds)
-            ) == .timedOut,
-               process.isRunning {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-                _ = processTerminated.wait(
-                    timeout: deadline(after: terminationGraceSeconds)
-                )
-            }
+            terminateBoundedly(process, processTerminated: processTerminated)
         }
 
         let drainReachedEnd = outputDrained.wait(
@@ -165,6 +162,26 @@ package enum BoundedProcessRunner {
         let nanoseconds = Int(seconds * 1_000_000_000)
         return .now() + .nanoseconds(nanoseconds)
     }
+
+    private static func terminateBoundedly(
+        _ process: Process,
+        processTerminated: DispatchSemaphore
+    ) {
+        process.terminate()
+        if processTerminated.wait(
+            timeout: deadline(after: terminationGraceSeconds)
+        ) == .timedOut,
+           process.isRunning {
+            Darwin.kill(process.processIdentifier, SIGKILL)
+            _ = processTerminated.wait(
+                timeout: deadline(after: terminationGraceSeconds)
+            )
+        }
+    }
+}
+
+package enum BoundedProcessRunnerError: Error {
+    case identityRejected
 }
 
 package enum StaticWorkerBoundary {
@@ -190,6 +207,21 @@ package enum StaticWorkerBoundary {
             return nil
         }
         return min(hardTimeoutSeconds, available)
+    }
+
+    package static func boundedDeadlineEpochSeconds(
+        inheritedDeadlineEpochSeconds: String?,
+        nowEpochSeconds: TimeInterval
+    ) -> String {
+        let localDeadline = nowEpochSeconds + hardTimeoutSeconds
+        guard let inheritedDeadlineEpochSeconds else {
+            return String(localDeadline)
+        }
+        guard let inheritedDeadline = TimeInterval(inheritedDeadlineEpochSeconds),
+              inheritedDeadline.isFinite else {
+            return inheritedDeadlineEpochSeconds
+        }
+        return String(min(inheritedDeadline, localDeadline))
     }
 
     package static func deadlineBudgetFailure() -> QualityReport {
@@ -256,6 +288,7 @@ package enum StaticWorkerBoundary {
               response.schemaVersion == StaticWorkerResponse.currentSchemaVersion,
               response.report.schemaVersion == 1,
               response.report.command == "static",
+              hasValidReportEnvelope(response.report),
               response.hasValidDigests else {
             return nil
         }
@@ -282,7 +315,8 @@ package enum StaticWorkerBoundary {
         return ValidatedStaticWorkerObservation(
             report: normalizedReport,
             profileSHA256: response.profileSHA256,
-            policySHA256: response.policySHA256
+            policySHA256: response.policySHA256,
+            sourceManifestSHA256: response.sourceManifestSHA256
         )
     }
 
@@ -291,6 +325,30 @@ package enum StaticWorkerBoundary {
             id: "QC.STATIC.WORKER_FAILURE",
             message: "Static worker did not return a valid report and matching terminal exit."
         )
+    }
+
+    private static func hasValidReportEnvelope(_ report: QualityReport) -> Bool {
+        guard !report.checks.isEmpty,
+              report.checks.count <= StaticEvidenceResultLimits.maximumChecks else {
+            return false
+        }
+        return report.checks.allSatisfy { check in
+            isBoundedNonEmptyString(check.id)
+                && isBoundedNonEmptyString(check.message)
+                && (check.path == nil || isBoundedNonEmptyString(check.path!))
+        }
+    }
+
+    private static func isBoundedNonEmptyString(_ value: String) -> Bool {
+        var count = 0
+        var hasNonWhitespace = false
+        for scalar in value.unicodeScalars.prefix(StaticEvidenceResultLimits.maximumStringScalars + 1) {
+            count += 1
+            if scalar != " " && scalar != "\t" && scalar != "\n" && scalar != "\r" {
+                hasNonWhitespace = true
+            }
+        }
+        return count <= StaticEvidenceResultLimits.maximumStringScalars && hasNonWhitespace
     }
 
     private static func blocked(id: String, message: String) -> QualityReport {
@@ -311,15 +369,18 @@ package struct ValidatedStaticWorkerObservation: Sendable {
     package let report: QualityReport
     package let profileSHA256: String?
     package let policySHA256: String?
+    package let sourceManifestSHA256: String?
 
     fileprivate init(
         report: QualityReport,
         profileSHA256: String?,
-        policySHA256: String?
+        policySHA256: String?,
+        sourceManifestSHA256: String?
     ) {
         self.report = report
         self.profileSHA256 = profileSHA256
         self.policySHA256 = policySHA256
+        self.sourceManifestSHA256 = sourceManifestSHA256
     }
 }
 
@@ -330,16 +391,19 @@ package struct StaticWorkerResponse: Codable, Sendable {
     package let report: QualityReport
     package let profileSHA256: String?
     package let policySHA256: String?
+    package let sourceManifestSHA256: String?
 
     package init(
         report: QualityReport,
         profileSHA256: String?,
-        policySHA256: String?
+        policySHA256: String?,
+        sourceManifestSHA256: String? = nil
     ) {
         schemaVersion = Self.currentSchemaVersion
         self.report = report
         self.profileSHA256 = profileSHA256
         self.policySHA256 = policySHA256
+        self.sourceManifestSHA256 = sourceManifestSHA256
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -347,6 +411,7 @@ package struct StaticWorkerResponse: Codable, Sendable {
         case report
         case profileSHA256
         case policySHA256
+        case sourceManifestSHA256
     }
 
     package init(from decoder: any Decoder) throws {
@@ -360,6 +425,7 @@ package struct StaticWorkerResponse: Codable, Sendable {
         report = try container.decode(QualityReport.self, forKey: .report)
         profileSHA256 = try container.decodeIfPresent(String.self, forKey: .profileSHA256)
         policySHA256 = try container.decodeIfPresent(String.self, forKey: .policySHA256)
+        sourceManifestSHA256 = try container.decodeIfPresent(String.self, forKey: .sourceManifestSHA256)
     }
 
     package func encode(to encoder: any Encoder) throws {
@@ -376,13 +442,20 @@ package struct StaticWorkerResponse: Codable, Sendable {
         } else {
             try container.encodeNil(forKey: .policySHA256)
         }
+        if let sourceManifestSHA256 {
+            try container.encode(sourceManifestSHA256, forKey: .sourceManifestSHA256)
+        } else {
+            try container.encodeNil(forKey: .sourceManifestSHA256)
+        }
     }
 
     fileprivate var hasValidDigests: Bool {
         let profileDigestIsValid = profileSHA256.map(isLowercaseSHA256) ?? false
         let policyDigestIsValid = policySHA256.map(isLowercaseSHA256) ?? false
+        let manifestDigestIsValid = sourceManifestSHA256.map(isLowercaseSHA256) ?? true
         guard (profileSHA256 == nil || profileDigestIsValid)
-            && (policySHA256 == nil || policyDigestIsValid) else {
+            && (policySHA256 == nil || policyDigestIsValid)
+            && manifestDigestIsValid else {
             return false
         }
         if profileDigestIsValid && policyDigestIsValid {

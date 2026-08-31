@@ -78,7 +78,7 @@
             "items": {
               "$ref": "#/$defs/permissionAction"
             },
-            "maxItems": 7,
+            "maxItems": 8,
             "type": "array",
             "uniqueItems": true
           },
@@ -192,7 +192,7 @@
             "items": {
               "$ref": "#/$defs/permissionAction"
             },
-            "maxItems": 7,
+            "maxItems": 8,
             "type": "array",
             "uniqueItems": true
           },
@@ -229,7 +229,7 @@
       "$ref": "#/$defs/sha256"
     },
     "profileSchemaVersion": {
-      "const": 1
+      "enum": [1, 2]
     },
     "residualRisks": {
       "items": {
@@ -350,6 +350,7 @@
       "enum": [
         "testCreation",
         "testModification",
+        "localBuildExecution",
         "localTestExecution",
         "githubExecution",
         "uiTests",

@@ -14,6 +14,24 @@ struct StaticWorkerBoundaryTests {
             ) == StaticWorkerBoundary.hardTimeoutSeconds
         )
         #expect(
+            StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+                inheritedDeadlineEpochSeconds: "250",
+                nowEpochSeconds: 100
+            ) == "250.0"
+        )
+        #expect(
+            StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+                inheritedDeadlineEpochSeconds: "1000",
+                nowEpochSeconds: 100
+            ) == "345.0"
+        )
+        #expect(
+            StaticWorkerBoundary.boundedDeadlineEpochSeconds(
+                inheritedDeadlineEpochSeconds: "invalid",
+                nowEpochSeconds: 100
+            ) == "invalid"
+        )
+        #expect(
             StaticWorkerBoundary.timeoutSeconds(
                 deadlineEpochSeconds: "250",
                 nowEpochSeconds: 100
@@ -121,6 +139,30 @@ struct StaticWorkerBoundaryTests {
 
         #expect(report.status == .pass)
         #expect(report.checks.map(\.id) == ["QC.STATIC.SCAN"])
+    }
+
+    @Test("A static evidence worker report cannot exceed the public schema check ceiling")
+    func reportCheckLimitFailsClosed() throws {
+        let checks = (0...StaticEvidenceResultLimits.maximumChecks).map { index in
+            QualityCheck(id: "QC.STATIC.\(index)", status: .pass, message: "Passed.")
+        }
+        let data = try JSONEncoder().encode(
+            StaticWorkerResponse(
+                report: QualityReport(command: "static", checks: checks),
+                profileSHA256: String(repeating: "a", count: 64),
+                policySHA256: String(repeating: "b", count: 64)
+            )
+        )
+        let result = BoundedProcessResult(
+            output: data,
+            terminationStatus: 0,
+            exitedNormally: true,
+            timedOut: false,
+            outputLimitExceeded: false,
+            outputDrainCompleted: true
+        )
+
+        #expect(StaticWorkerBoundary.report(for: result).status == .blocked)
     }
 
     @Test("The worker binds its report to the exact profile and policy bytes it loaded")
@@ -245,6 +287,25 @@ struct StaticWorkerBoundaryTests {
         #expect(oversizedResult.output == Data("over".utf8))
         #expect(oversizedResult.outputLimitExceeded)
         #expect(oversizedResult.outputDrainCompleted)
+    }
+
+    @Test("A rejected launched process is terminated before its output can be trusted")
+    func processIdentityRejectionFailsClosed() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "trap '' TERM; exec /bin/sleep 5"]
+
+        let start = Date()
+        #expect(throws: BoundedProcessRunnerError.self) {
+            try BoundedProcessRunner.run(
+                process,
+                timeoutSeconds: 1,
+                maximumOutputBytes: 1_024,
+                validateLaunchedProcess: { _ in false }
+            )
+        }
+        #expect(Date().timeIntervalSince(start) < 3)
+        #expect(!process.isRunning)
     }
 
     @Test(

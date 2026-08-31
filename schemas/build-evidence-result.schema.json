@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MArtem/AIZenflowQualityControl/schemas/build-evidence-result.schema.json",
+  "title": "AIZenflow Xcode Build Evidence Execution Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "command", "status", "report", "evidence", "verification"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "command": { "const": "build-evidence" },
+    "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
+    "report": { "$ref": "#/$defs/report" },
+    "evidence": { "oneOf": [{ "type": "null" }, { "$ref": "quality-evidence.schema.json" }] },
+    "verification": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": { "const": "PASS" },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "PASS" } } },
+            { "properties": { "checks": { "items": { "properties": { "status": { "const": "PASS" } } } } } }
+          ]
+        },
+        "evidence": {
+          "allOf": [
+            { "$ref": "quality-evidence.schema.json" },
+            {
+              "properties": {
+                "profileSchemaVersion": { "const": 2 },
+                "claimedVerdict": { "const": "READY" },
+                "testCounts": false,
+                "reviewRevision": false,
+                "residualRisks": { "maxItems": 0 },
+                "commands": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "properties": {
+                      "id": { "const": "xcode-build" },
+                      "exitCode": { "const": 0 },
+                      "actions": {
+                        "oneOf": [
+                          { "const": ["localBuildExecution"] },
+                          { "const": ["githubExecution"] }
+                        ]
+                      },
+                      "authorization": { "const": "USER" }
+                    }
+                  }
+                },
+                "gates": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "items": {
+                    "properties": {
+                      "id": { "const": "QC.BUILD" },
+                      "status": { "const": "PASS" },
+                      "commandID": { "const": "xcode-build" },
+                      "actions": {
+                        "oneOf": [
+                          { "const": ["localBuildExecution"] },
+                          { "const": ["githubExecution"] }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "artifacts": {
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "properties": {
+                      "path": { "enum": ["xcode/build-results.json", "xcode/build-log.json"] }
+                    }
+                  },
+                  "allOf": [
+                    { "contains": { "properties": { "path": { "const": "xcode/build-results.json" } } }, "minContains": 1, "maxContains": 1 },
+                    { "contains": { "properties": { "path": { "const": "xcode/build-log.json" } } }, "minContains": 1, "maxContains": 1 }
+                  ]
+                }
+              },
+              "oneOf": [
+                {
+                  "properties": {
+                    "commands": { "items": { "properties": { "actions": { "const": ["localBuildExecution"] } } } },
+                    "gates": { "items": { "properties": { "actions": { "const": ["localBuildExecution"] } } } }
+                  }
+                },
+                {
+                  "properties": {
+                    "commands": { "items": { "properties": { "actions": { "const": ["githubExecution"] } } } },
+                    "gates": { "items": { "properties": { "actions": { "const": ["githubExecution"] } } } }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "verification": {
+          "allOf": [
+            { "$ref": "#/$defs/verification" },
+            { "properties": { "verdict": { "const": "READY" }, "issues": { "maxItems": 0 } } }
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "status": { "const": "FAIL" },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "FAIL" } } },
+            { "properties": { "checks": { "contains": { "properties": { "status": { "const": "FAIL" } } }, "minContains": 1 } } }
+          ]
+        },
+        "evidence": { "type": "null" },
+        "verification": { "type": "null" }
+      }
+    },
+    {
+      "properties": {
+        "status": { "const": "BLOCKED" },
+        "report": {
+          "allOf": [
+            { "properties": { "status": { "const": "BLOCKED" } } },
+            { "properties": { "checks": { "not": { "contains": { "properties": { "status": { "const": "FAIL" } } } } } } },
+            { "properties": { "checks": { "contains": { "properties": { "status": { "const": "BLOCKED" } } }, "minContains": 1 } } }
+          ]
+        },
+        "evidence": { "type": "null" },
+        "verification": { "type": "null" }
+      }
+    }
+  ],
+  "$defs": {
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "command", "status", "checks"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "command": { "const": "build" },
+        "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2048,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "message"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
+              "message": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "path": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            }
+          }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "issues"],
+      "properties": {
+        "verdict": { "const": "READY" },
+        "issues": {
+          "type": "array",
+          "maxItems": 0,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "message": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

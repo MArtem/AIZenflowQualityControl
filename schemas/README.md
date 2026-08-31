@@ -31,9 +31,43 @@ so pre-execution blocked or user-declined outcomes remain representable. Command
 arrays reject identical duplicate objects in the schema; runtime verification additionally enforces
 unique IDs or paths when entries differ. Artifact paths use the same non-empty relative-segment
 rules in schema and runtime. The schema is not yet wired to a CLI evidence producer. Public
-`EvidenceLoader` provides the only full-document decode path and rejects oversized input,
+`EvidenceLoader` decodes bare evidence and `EvidenceReceiptLoader` extracts nested evidence from
+the public execution envelope; both reject oversized input,
 duplicate object keys, unknown object properties, and explicit null optionals. `QualityEvidence`
 remains encode-only. Evidence documents are capped at 8 MiB, top-level collections at 64 entries,
 and bounded strings at 1,024 Unicode scalars. Runtime and schema share an explicit stable whitespace
 set, including U+200B, and the schema's conservative worst-case escaped-string budget remains below
 the loader cap. Residual-risk entries are unique in both layers.
+
+`static-evidence-result.schema.json` defines the versioned closed public envelope for
+`quality static-evidence`. It contains the normalized static report and includes evidence plus
+verification together only after the execution boundary's coordinator/verifier path succeeds. A
+`PASS` result therefore requires `READY` evidence with exactly one successful `static` command and
+one bound `QC.STATIC` PASS gate, a `READY` verification with zero issues, and a matching `PASS`
+report. Evidence-free boundary failures remain `BLOCKED` and do not imply that a
+build, tests, UI/device check, review, or attestation happened.
+
+`trusted-evidence-expectation.schema.json` is the explicit caller-owned expectation format for
+mode-level aggregation. It carries the complete identity, permission, command, gate, test-count,
+review, artifact, and residual-risk expectations; it is not inferred from evidence. The public
+`quality aggregate-evidence` command loads this format together with up to 64 evidence receipts and
+emits the closed `aggregate-evidence-result.schema.json` envelope. Invalid or unverifiable inputs
+remain evidence-free `BLOCKED`.
+
+`mode-plan-result.schema.json` defines the deterministic pre-execution plan emitted by
+`quality mode-plan`. It expands `static`, `build`, `build-and-tests`, and `full` into stable step
+IDs while preserving applicability and permission status. A mode plan is not runtime evidence:
+`NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` never become `PASS`; the actual execution
+boundaries must produce separately authenticated evidence.
+
+`deterministic-check-result.schema.json` defines the first catalog-backed adapter result. It binds
+the check report to a lowercase Git `HEAD` revision and permits only the bounded
+`QC.SECRETS.TRACKED` finding shape. Adapter unavailability is represented as `BLOCKED`, not a
+successful empty scan.
+
+`mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
+It preserves each child boundary report, evidence, and verification result in execution order.
+The envelope never infers a composite evidence claim; callers needing one must supply an explicit
+trusted expectation to `quality aggregate-evidence`. Missing test, UI, archive/signing,
+feature-flag, or privacy boundaries remain explicit `NOT_RUN_BY_USER_DECISION`,
+`NOT_APPLICABLE`, or `BLOCKED` steps.

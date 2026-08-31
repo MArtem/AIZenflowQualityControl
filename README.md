@@ -25,9 +25,8 @@ application integration. Stage 9A includes bounded artifact-hashing primitives b
 worker boundary, but production artifact evidence remains blocked until a dedicated OS-backed
 immutable-snapshot provider exists; a read-only mount flag alone is not sufficient proof. The
 engine does not create or mount privileged snapshots. Its in-memory evidence producer and
-package-internal static coordinator require coordinator-owned observations; neither adds a public
-execution-boundary or workflow evidence producer, cryptographic attestation, or authoritative
-release proof.
+package-internal static coordinator require coordinator-owned observations; neither adds a general
+workflow evidence producer, cryptographic attestation, or authoritative release proof.
 Stage 9C1 adds only `validate-evidence-expectation`: it validates the bounded closed document
 envelope and explicitly does not turn a caller-supplied file into trusted evidence or a verdict.
 The public `quality static` command now isolates the cooperative scanner in a child process, applies
@@ -37,6 +36,17 @@ and validates report/exit consistency before forwarding a result. The internal c
 only that validated response plus separately observed identity/profile facts into in-memory static
 evidence; it accepts no expectation or evidence JSON. Buildable Xcode fixtures remain separate work
 and are not claimed by this boundary.
+`quality static-evidence` is the narrow public execution boundary for that scanner: it verifies
+exact clean Git source/engine checkouts, parent-read profile/policy snapshots, selected toolchain,
+worker digest binding, and unchanged checkouts before emitting verifier-checked evidence. It remains
+advisory static evidence only; it does not run builds, tests, UI/device checks, reviews, or attest.
+`quality build-evidence` is the corresponding narrow boundary for one profile-declared Xcode build.
+It authenticates the pinned source and engine checkouts, the running engine `CDHash`, the exact
+Git-tracked profile bytes, toolchain, selected scheme/configuration/destination, and permission action
+before execution, then observes them again before emitting evidence. A failed build emits `FAIL`
+without evidence; missing authority, unstable inputs, unsupported Git index state, supervision
+failure, or verification failure emits evidence-free `BLOCKED`. This boundary does not run tests,
+UI/device checks, review, archive, signing, upload, or release operations.
 
 ## Authority Boundary
 
@@ -73,7 +83,7 @@ results, and residual risk.
 - Branch protection, hooks, application profiles, and application integration are outside this
   scaffold.
 
-## Stage 5 Commands
+## Command Surface
 
 The package has no third-party dependencies and declares a macOS 13 minimum. After the user runs
 `swift build`, the bounded command surface is:
@@ -83,19 +93,68 @@ swift run quality validate-profile --profile <profile.json>
 swift run quality validate-evidence-expectation --expectation <expectation.json>
 swift run quality doctor --profile <profile.json> --repository-root <repository>
 swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository>
+swift run quality static --profile <profile.json> --policy <policy.json> --repository-root <repository> --scope explicit-source-paths
+quality mode-plan --profile <profile.json> --mode <static|build|build-and-tests|full>
+quality mode-execute --profile <profile.json> --mode <static|build|build-and-tests|full> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> [--scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>]
+quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex>
+quality build-evidence --profile <profile.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> --scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>
+quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expectation <trusted-expectation.json>
 ```
 
-- `validate-profile` decodes schema version 1 and rejects missing, absolute, duplicate, or
-  traversal-bearing project/source paths.
+- `validate-profile` decodes profile schema versions 1 and 2. Version 1 preserves absolute sandbox
+  paths for compatibility; version 2 requires normalized repository-relative sandbox paths so the
+  same exact Git-tracked profile bytes resolve portably on local Macs and GitHub runners. Project,
+  source, and version 2 sandbox traversal remains forbidden.
 - `validate-evidence-expectation` validates only a bounded, closed document envelope; the caller-
   supplied document remains untrusted and does not produce an evidence verdict.
 - `doctor` verifies configured repository, project/workspace, source, and sandbox paths without
-  running Xcode, builds, or tests.
+  running builds or tests. For schema version 2 it resolves the sandbox from the supplied repository
+  root and rejects symbolic-link escape before Xcode graph discovery.
+- `mode-plan` expands one user-selected manual mode into stable, permission-aware steps. It is a
+  pre-execution plan only; `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` are never runtime
+  PASS evidence.
+- `mode-execute` runs the existing authenticated `static-evidence` boundary and, for modes beyond
+  `static`, the authenticated `build-evidence` boundary in order. A failed or blocked prerequisite
+  skips later steps. Tests, UI tests, archive/signing, feature-flag, and privacy steps are emitted
+  as explicit `NOT_RUN_BY_USER_DECISION`, `NOT_APPLICABLE`, or `BLOCKED` until their dedicated
+  evidence boundaries exist. Child evidence remains attached to each step; the mode envelope never
+  infers composite evidence or a trusted expectation.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
-  checks from explicit profile and policy inputs.
+  checks from explicit profile and policy inputs. Schema version 2 remains blocked by default until
+  Xcode build-graph membership is authenticated. The explicit `--scope explicit-source-paths`
+  variant scans only the profile's declared source paths and states that it does not assert Xcode
+  target membership; it cannot produce build or static-evidence proof.
+- `static-evidence` scans the asserted Git-tree manifest directly; it never scans mutable
+  source-worktree bytes or projects Git paths onto a filesystem. `PASS` includes evidence and an empty-issue verifier result;
+  the caller must build the pinned engine first and supply that exact executable's `codesign`
+  `CDHash`; preflight, identity, snapshot, process, or checkout failures are evidence-free `BLOCKED`.
+- `build-evidence` runs exactly one profile-declared Xcode build through the bounded supervisor.
+  The profile must be a regular, non-symlink Git-tracked file inside the clean source checkout and
+  its working bytes must equal the expected source revision. Source and engine checkouts containing
+  submodules, sparse/skip-worktree entries, or assume-unchanged entries are rejected because the
+  current exact-SHA boundary does not model them. `local` records `localBuildExecution`; `github`
+  records `githubExecution` and is prohibited when the profile sets GitHub execution to `off`.
+  A schema version 2 sandbox is resolved only from the authenticated source checkout root; its
+  physical machine path is validated at execution time but is intentionally not copied into the
+  portable profile identity.
+  Xcode and `xcresulttool` run with a fixed minimal environment, so undeclared caller build-setting,
+  linker, toolchain, and xcconfig overrides cannot silently change a command with the same identity.
+  The command invocation is only the engine's action-authorization input: it cannot authenticate a
+  human operator, so agents and automation must still obtain the separate approval required by the
+  governing reusable rules before invoking it.
+- `aggregate-evidence` loads bounded, untrusted evidence receipts and a complete caller-owned
+  expectation from `schemas/trusted-evidence-expectation.schema.json`, then joins them only through
+  `EvidenceVerifier.aggregate`. Empty, duplicate, oversized, malformed, identity-mismatched, or
+  unverifiable inputs produce evidence-free `BLOCKED`; a valid failing gate produces a non-PASS
+  result with its verified evidence preserved for diagnosis. The command does not infer expected
+  commands, permissions, gates, or identities from the receipts.
 
-Every command emits structured JSON and uses `PASS`, `FAIL`, or `BLOCKED`. Malformed,
+Every command emits structured JSON. Execution boundaries use `PASS`, `FAIL`, or `BLOCKED`; manual
+mode orchestration additionally reports `NOT_APPLICABLE`, `NOT_RUN_BY_USER_DECISION`, and `SKIPPED`.
+Malformed,
 unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`.
+The public result contract is `schemas/build-evidence-result.schema.json`; only its `PASS` branch
+permits non-null evidence and verification.
 
 ## Permission And Evidence Contracts
 
@@ -122,6 +181,10 @@ unreadable, unsupported, missing, or boundary-unsafe inputs never produce `PASS`
   claimed verdict inconsistent with the gate set becomes `BYPASSED`.
 - `READY_WITH_ACCEPTED_RISK` is represented but is not automatically derived; ownership and
   exception governance remain future stages.
+- `EvidenceVerifier.aggregate` is the bounded in-memory join for mode-level evidence: all inputs
+  must share one source/engine/profile/toolchain/permission identity, duplicate or oversized input
+  is rejected, and the merged result is re-verified against the caller-owned complete expectation.
+  Any aggregate verification issue returns no evidence rather than a partial success.
 
 The neutral fixtures under `fixtures/profiles/` demonstrate a structurally valid profile and a
 deliberately invalid traversal/cache-boundary profile. They are not a test suite.

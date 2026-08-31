@@ -19,7 +19,10 @@ let package = Package(
         .executableTarget(
             name: "QualityCLI",
             dependencies: ["QualityCore"],
-            path: "engine/Sources/QualityCLI"
+            path: "engine/Sources/QualityCLI",
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
         ),
         .testTarget(
             name: "QualityCoreTests",
