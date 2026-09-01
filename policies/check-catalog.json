@@ -107,8 +107,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Synchronize localization keys and validate every localized resource format.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/localization/passing-project/", "negative": "fixtures/localization/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.RESOURCES.ASSETS",

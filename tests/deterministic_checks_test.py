@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -311,6 +312,185 @@ class DependencyLockDriftAdapterTests(unittest.TestCase):
             "Package.swift": self.package_manifest(),
             "Package.resolved": json.dumps(lock).encode("utf-8"),
         })
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+
+class LocalizationCatalogAdapterTests(unittest.TestCase):
+    def run_check(self, files: dict[str, bytes]) -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for path, contents in files.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(root),
+                    "-c", "user.name=fixture",
+                    "-c", "user.email=fixture@example.invalid",
+                    "commit", "--quiet", "-m", "fixture",
+                ],
+                check=True,
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "--repository-root", str(root),
+                    "--catalog", str(CATALOG),
+                    "--check", "QC.LOCALIZATION.CATALOG",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_SYSTEM": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                },
+            )
+            return result.returncode, json.loads(result.stdout)
+
+    @staticmethod
+    def stringsdict() -> bytes:
+        return plistlib.dumps({
+            "item.count": {
+                "NSStringLocalizedFormatKey": "%#@items@",
+                "items": {
+                    "NSStringFormatSpecTypeKey": "NSStringPluralRuleType",
+                    "NSStringFormatValueTypeKey": "d",
+                    "one": "%d item",
+                    "other": "%d items",
+                },
+            },
+        }, fmt=plistlib.FMT_XML)
+
+    @staticmethod
+    def xcstrings(localizations: dict[str, dict] | None = None) -> bytes:
+        values = localizations or {
+            "en": {"stringUnit": {"state": "translated", "value": "Welcome"}},
+            "ru": {"stringUnit": {"state": "translated", "value": "Добро пожаловать"}},
+        }
+        return json.dumps({
+            "sourceLanguage": "en",
+            "strings": {"welcome.title": {"localizations": values}},
+            "version": "1.0",
+        }).encode("utf-8")
+
+    def test_no_localization_resources_passes(self) -> None:
+        returncode, report = self.run_check({"README.md": b"No localized resources.\n"})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["checks"][0]["id"], "QC.LOCALIZATION.CATALOG")
+
+    def test_matching_strings_locales_pass(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.strings": b'"welcome" = "Welcome";\n',
+            "Resources/ru.lproj/Localizable.strings": '"welcome" = "Добро пожаловать";\n'.encode("utf-8"),
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_strings_key_parity_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.strings": b'"welcome" = "Welcome";\n"count" = "%d";\n',
+            "Resources/ru.lproj/Localizable.strings": '"welcome" = "Добро пожаловать";\n'.encode("utf-8"),
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("count", report["checks"][0]["findings"][0]["message"])
+
+    def test_duplicate_strings_key_blocked(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.strings": b'"welcome" = "One";\n"welcome" = "Two";\n',
+        })
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_malformed_strings_blocked(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.strings": b'"welcome" = "Welcome"\n',
+        })
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_matching_stringsdict_locales_pass(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.stringsdict": self.stringsdict(),
+            "Resources/ru.lproj/Localizable.stringsdict": self.stringsdict(),
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_malformed_stringsdict_blocked(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.stringsdict": b"<?xml version=\"1.0\"?><plist><dict></dict>",
+        })
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_stringsdict_without_plural_rule_is_blocked(self) -> None:
+        malformed = plistlib.dumps({
+            "item.count": {"NSStringLocalizedFormatKey": "%#@items@"},
+        }, fmt=plistlib.FMT_XML)
+        returncode, report = self.run_check({"Resources/en.lproj/Localizable.stringsdict": malformed})
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_duplicate_stringsdict_key_is_blocked(self) -> None:
+        duplicate = b'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>item.count</key><dict><key>NSStringLocalizedFormatKey</key><string>%#@items@</string></dict>
+<key>item.count</key><dict><key>NSStringLocalizedFormatKey</key><string>%#@items@</string></dict>
+</dict></plist>'''
+        returncode, report = self.run_check({"Resources/en.lproj/Localizable.stringsdict": duplicate})
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_empty_fallback_value_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/en.lproj/Localizable.strings": b'"welcome" = "";\n',
+            "Resources/ru.lproj/Localizable.strings": '"welcome" = "Добро пожаловать";\n'.encode("utf-8"),
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("empty", report["checks"][0]["findings"][0]["message"])
+
+    def test_matching_xcstrings_pass(self) -> None:
+        returncode, report = self.run_check({"Resources/Localizable.xcstrings": self.xcstrings()})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["checks"][0]["id"], "QC.LOCALIZATION.CATALOG")
+
+    def test_xcstrings_missing_source_fallback_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/Localizable.xcstrings": self.xcstrings({
+                "ru": {"stringUnit": {"state": "translated", "value": "Добро пожаловать"}},
+            }),
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("source-language fallback", report["checks"][0]["findings"][0]["message"])
+
+    def test_duplicate_xcstrings_json_property_blocked(self) -> None:
+        duplicate = b'{"sourceLanguage":"en","sourceLanguage":"en","strings":{},"version":"1.0"}'
+        returncode, report = self.run_check({"Resources/Localizable.xcstrings": duplicate})
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_unsupported_xcstrings_shape_blocked(self) -> None:
+        unsupported = json.dumps({
+            "sourceLanguage": "en",
+            "strings": {},
+            "version": "1.0",
+            "unexpected": True,
+        }).encode("utf-8")
+        returncode, report = self.run_check({"Resources/Localizable.xcstrings": unsupported})
         self.assertEqual(returncode, 2)
         self.assertEqual(report["status"], "BLOCKED")
 

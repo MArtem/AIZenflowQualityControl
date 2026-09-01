@@ -29,3 +29,9 @@ objects, and immutable byte/file limits are `BLOCKED`, never `PASS`.
 unique identities, and matches external `.package(url:)` or Xcode `repositoryURL` declarations to
 the resolved pins. Local-only packages with no external declarations may omit a lockfile; malformed
 or unsupported lockfiles are `BLOCKED`, while missing or unmatched external pins are `FAIL`.
+
+`QC.LOCALIZATION.CATALOG` is an executable, repository-neutral adapter. It validates tracked
+`.strings`, `.stringsdict`, and `.xcstrings` resources, requires parity across legacy locale groups,
+and requires a non-empty fallback candidate or source-language fallback. Malformed, duplicate,
+unsupported, or bounded-input failures are `BLOCKED`; key drift and missing fallback coverage are
+`FAIL`. Translation quality and linguistic correctness remain human review concerns.

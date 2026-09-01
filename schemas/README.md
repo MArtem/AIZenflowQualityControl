@@ -76,6 +76,10 @@ and compares external SwiftPM/Xcode package declarations with resolved pins. Mis
 external declarations and unmatched pins are `FAIL`; malformed, unsupported, oversized, or
 non-immutable lock inputs are `BLOCKED`.
 
+The same schema permits `QC.LOCALIZATION.CATALOG`. Its bounded findings cover legacy and string
+catalog resource validation; malformed or unsupported resources are represented as `BLOCKED`, while
+key parity and fallback coverage findings are `FAIL`.
+
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.
 The envelope never infers a composite evidence claim; callers needing one must supply an explicit

@@ -1,0 +1,3 @@
+/* English fallback localization. */
+"welcome.title" = "Welcome";
+"welcome.count" = "%d items";
