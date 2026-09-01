@@ -35,3 +35,10 @@ or unsupported lockfiles are `BLOCKED`, while missing or unmatched external pins
 and requires a non-empty fallback candidate or source-language fallback. Malformed, duplicate,
 unsupported, or bounded-input failures are `BLOCKED`; key drift and missing fallback coverage are
 `FAIL`. Translation quality and linguistic correctness remain human review concerns.
+
+`QC.RESOURCES.ASSETS` is an executable, repository-neutral adapter. It validates tracked Xcode
+asset catalogs, known asset-set metadata, safe filename references, orphan files, and high-confidence
+literal resource references. Malformed, unsupported, oversized, traversal, or symlink inputs are
+`BLOCKED`; missing/duplicate/orphan resources, missing literal references, and compiled binary
+outputs are `FAIL`. Dynamic names, runtime bundle membership, and visual/linguistic correctness
+remain outside the static claim.

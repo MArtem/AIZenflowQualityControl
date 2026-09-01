@@ -81,3 +81,8 @@ The localization adapter tests cover no-resource applicability, `.strings` parit
 `.stringsdict` plural structure, `.xcstrings` source-language fallback, duplicate JSON keys, and
 malformed or unsupported resource shapes. They use temporary committed Git fixtures and never run
 Xcode or mutate a source checkout.
+
+The resources adapter tests cover no-resource applicability, valid asset catalogs, missing metadata
+or filename targets, orphan and duplicate asset files, malformed/traversal JSON, symlink boundaries,
+forbidden compiled outputs, literal source references, and loose image resources. They use temporary
+committed Git fixtures under the repository's ignored `.quality-control-cache/` and never run Xcode.

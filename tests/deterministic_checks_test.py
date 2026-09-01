@@ -495,5 +495,191 @@ class LocalizationCatalogAdapterTests(unittest.TestCase):
         self.assertEqual(report["status"], "BLOCKED")
 
 
+class ResourceAssetsAdapterTests(unittest.TestCase):
+    @staticmethod
+    def temporary_parent() -> Path:
+        parent = REPOSITORY_ROOT / ".quality-control-cache" / "resource-tests"
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent
+
+    def run_check(
+        self,
+        files: dict[str, bytes],
+        symlinks: dict[str, str] | None = None,
+    ) -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory(dir=self.temporary_parent()) as temporary_directory:
+            root = Path(temporary_directory)
+            for path, contents in files.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            for path, target in (symlinks or {}).items():
+                link = root / path
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(target)
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(root),
+                    "-c", "user.name=fixture",
+                    "-c", "user.email=fixture@example.invalid",
+                    "commit", "--quiet", "-m", "fixture",
+                ],
+                check=True,
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "--repository-root", str(root),
+                    "--catalog", str(CATALOG),
+                    "--check", "QC.RESOURCES.ASSETS",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_SYSTEM": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                },
+            )
+            return result.returncode, json.loads(result.stdout)
+
+    @staticmethod
+    def contents(**payload: object) -> bytes:
+        value = {"info": {"author": "xcode", "version": 1}, **payload}
+        return json.dumps(value, sort_keys=True).encode("utf-8")
+
+    def test_no_resources_passes(self) -> None:
+        returncode, report = self.run_check({"README.md": b"No local resources.\n"})
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["checks"][0]["id"], "QC.RESOURCES.ASSETS")
+
+    def test_valid_asset_catalog_and_literal_references_pass(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": self.contents(),
+            "Assets.xcassets/Brand.colorset/Contents.json": self.contents(
+                colors=[{"idiom": "universal"}],
+            ),
+            "Assets.xcassets/Logo.imageset/Contents.json": self.contents(
+                images=[{"filename": "logo.svg", "idiom": "universal"}],
+                properties={"preserves-vector-representation": True},
+            ),
+            "Assets.xcassets/Logo.imageset/logo.svg": b"<svg></svg>\n",
+            "Sources/View.swift": b'import SwiftUI\nlet logo = Image("Logo")\nlet brand = Color("Brand")\n',
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_missing_asset_set_contents_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": self.contents(),
+            "Assets.xcassets/Logo.imageset/logo.svg": b"<svg></svg>\n",
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("missing its Contents.json", report["checks"][0]["findings"][0]["message"])
+
+    def test_missing_filename_target_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": self.contents(),
+            "Assets.xcassets/Logo.imageset/Contents.json": self.contents(
+                images=[{"filename": "missing.svg", "idiom": "universal"}],
+            ),
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("missing from Git HEAD", report["checks"][0]["findings"][0]["message"])
+
+    def test_orphan_asset_file_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": self.contents(),
+            "Assets.xcassets/Logo.imageset/Contents.json": self.contents(),
+            "Assets.xcassets/Logo.imageset/orphan.svg": b"<svg></svg>\n",
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("not referenced", report["checks"][0]["findings"][0]["message"])
+
+    def test_duplicate_filename_references_fail(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": self.contents(),
+            "Assets.xcassets/Logo.imageset/Contents.json": self.contents(
+                images=[
+                    {"filename": "logo.svg", "idiom": "universal"},
+                    {"filename": "logo.svg", "idiom": "universal", "scale": "2x"},
+                ],
+            ),
+            "Assets.xcassets/Logo.imageset/logo.svg": b"<svg></svg>\n",
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("referenced more than once", report["checks"][0]["findings"][0]["message"])
+
+    def test_malformed_contents_is_blocked(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": b'{"info": {"version": 1},',
+        })
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_filename_traversal_is_blocked(self) -> None:
+        returncode, report = self.run_check({
+            "Assets.xcassets/Contents.json": self.contents(),
+            "Assets.xcassets/Logo.imageset/Contents.json": self.contents(
+                images=[{"filename": "../logo.svg", "idiom": "universal"}],
+            ),
+            "Assets.xcassets/logo.svg": b"<svg></svg>\n",
+        })
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_symlink_asset_is_blocked(self) -> None:
+        returncode, report = self.run_check(
+            {
+                "Assets.xcassets/Contents.json": self.contents(),
+                "Assets.xcassets/Logo.imageset/Contents.json": self.contents(
+                    images=[{"filename": "logo.svg", "idiom": "universal"}],
+                ),
+            },
+            symlinks={"Assets.xcassets/Logo.imageset/logo.svg": "../../logo.svg"},
+        )
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_forbidden_binary_output_fails(self) -> None:
+        returncode, report = self.run_check({"Resources/Assets.car": b"compiled output"})
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("binary output", report["checks"][0]["findings"][0]["message"])
+
+    def test_missing_literal_resource_reference_fails(self) -> None:
+        returncode, report = self.run_check({
+            "Sources/View.swift": b'import SwiftUI\nlet logo = Image("MissingLogo")\n',
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("missing local resource", report["checks"][0]["findings"][0]["message"])
+
+    def test_source_reference_file_limit_is_blocked(self) -> None:
+        files = {f"Sources/File{index}.swift": b"struct Fixture {}\n" for index in range(4097)}
+        returncode, report = self.run_check(files)
+        self.assertEqual(returncode, 2)
+        self.assertEqual(report["status"], "BLOCKED")
+
+    def test_loose_image_resource_satisfies_literal_reference(self) -> None:
+        returncode, report = self.run_check({
+            "Resources/photo@2x.png": b"not-real-image-fixture",
+            "Sources/View.swift": b'import UIKit\nlet image = UIImage(named: "photo")\n',
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+
 if __name__ == "__main__":
     unittest.main()

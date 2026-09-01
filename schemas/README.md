@@ -62,7 +62,8 @@ boundaries must produce separately authenticated evidence.
 
 `deterministic-check-result.schema.json` defines catalog-backed adapter results. It binds the check
 report to a lowercase Git `HEAD` revision and permits the bounded `QC.SECRETS.TRACKED`,
-`QC.TODO.OWNER`, and `QC.GENERATED.OWNERSHIP` finding shapes. Adapter unavailability is
+`QC.TODO.OWNER`, `QC.GENERATED.OWNERSHIP`, `QC.DEPENDENCY.LOCK_DRIFT`,
+`QC.LOCALIZATION.CATALOG`, and `QC.RESOURCES.ASSETS` finding shapes. Adapter unavailability is
 represented as `BLOCKED`, not a successful empty scan.
 
 `generated-files-manifest.schema.json` defines the transport shape for the tracked generated-file
@@ -79,6 +80,11 @@ non-immutable lock inputs are `BLOCKED`.
 The same schema permits `QC.LOCALIZATION.CATALOG`. Its bounded findings cover legacy and string
 catalog resource validation; malformed or unsupported resources are represented as `BLOCKED`, while
 key parity and fallback coverage findings are `FAIL`.
+
+The same schema permits `QC.RESOURCES.ASSETS`. Its bounded findings cover Xcode asset-catalog
+metadata, safe filename ownership, high-confidence literal resource references, and forbidden
+compiled resource outputs. Malformed, unsupported, oversized, traversal, or symlink inputs are
+`BLOCKED`; missing, duplicate, orphan, or forbidden resources are `FAIL`.
 
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.
