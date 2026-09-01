@@ -31,3 +31,9 @@ duplicate, and unsupported lock shapes are covered by focused adapter tests.
 `localization/failing-project/` intentionally omits one Russian key; the localization adapter must
 return `FAIL`. Malformed, duplicate, `.stringsdict`, and `.xcstrings` cases are covered by focused
 adapter tests.
+
+`resources/passing-project/` contains a valid asset catalog with a colorset, an image set whose
+filename is present, and matching literal `Image`/`Color` references. `resources/failing-project/`
+contains a missing asset filename and a tracked compiled `.car` output; the resources adapter must
+return `FAIL`. Malformed JSON, traversal, duplicate references, symlink, orphan, and loose-resource
+cases are covered by focused adapter tests.

@@ -46,6 +46,35 @@ MAX_LOCALIZATION_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_LOCALIZATION_KEYS = 8_192
 MAX_LOCALIZATION_LOCALES = 64
 MAX_LOCALIZATION_NESTING = 32
+MAX_RESOURCE_CATALOGS = 256
+MAX_RESOURCE_CONTENTS_FILES = 2_048
+MAX_RESOURCE_CONTENTS_BYTES = 512 * 1024
+MAX_RESOURCE_TOTAL_BYTES = 32 * 1024 * 1024
+MAX_RESOURCE_JSON_NODES = 20_000
+MAX_RESOURCE_REFERENCES = 4_096
+MAX_RESOURCE_SOURCE_BYTES = 1 * 1024 * 1024
+MAX_RESOURCE_SOURCE_FILES = 4_096
+ASSET_SET_SUFFIXES = (
+    ".appiconset", ".colorset", ".dataset", ".imageset", ".imagestack", ".launchimage",
+    ".stickerpack", ".symbolset", ".arreferenceimage", ".reality", ".texture", ".spriteatlas",
+)
+RESOURCE_BINARY_OUTPUT_SUFFIXES = (".app", ".car", ".dSYM", ".ipa", ".xcarchive", ".xcresult")
+RESOURCE_IMAGE_FILE_SUFFIXES = (
+    ".gif", ".heic", ".jpeg", ".jpg", ".pdf", ".png", ".svg", ".tif", ".tiff", ".webp",
+)
+RESOURCE_DATA_FILE_SUFFIXES = (".bin", ".json", ".mlmodel", ".plist", ".txt")
+RESOURCE_SOURCE_SUFFIXES = (".h", ".m", ".mm", ".swift", ".storyboard", ".xib")
+RESOURCE_SOURCE_EXCLUDED_COMPONENTS = {".build", ".git", ".quality-control", "docs", "fixture", "fixtures", "tests", "uitests"}
+RESOURCE_JSON_ARRAY_KEYS = {"appearances", "colors", "data", "groups", "images", "items"}
+RESOURCE_REFERENCE_SEARCH_PATTERN = r"(Image|Color|UIImage|NSImage|NSDataAsset)[[:space:]]*\("
+RESOURCE_REFERENCE_PATTERNS = (
+    ("Image", re.compile(r'\bImage\s*\(\s*"(?P<name>[^"\\\r\n]{0,256})"')),
+    ("Image", re.compile(r'\bImage\s*\(\s*decorative\s*:\s*"(?P<name>[^"\\\r\n]{0,256})"')),
+    ("Color", re.compile(r'\bColor\s*\(\s*"(?P<name>[^"\\\r\n]{0,256})"')),
+    ("UIImage", re.compile(r'\bUIImage\s*\(\s*named\s*:\s*"(?P<name>[^"\\\r\n]{0,256})"')),
+    ("NSImage", re.compile(r'\bNSImage\s*\(\s*named\s*:\s*"(?P<name>[^"\\\r\n]{0,256})"')),
+    ("NSDataAsset", re.compile(r'\bNSDataAsset\s*\(\s*name\s*:\s*"(?P<name>[^"\\\r\n]{0,256})"')),
+)
 SECRET_PATH_SUFFIXES = (".p12", ".pfx", ".mobileprovision")
 SECRET_MARKER = re.compile(
     r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|"
@@ -706,6 +735,290 @@ def findings_for_localization_catalog(root: Path, paths: list[str]) -> list[dict
     return findings
 
 
+def resource_catalog_root(path: str) -> str | None:
+    components = path.split("/")
+    for index, component in enumerate(components):
+        if component.lower().endswith(".xcassets"):
+            return "/".join(components[:index + 1])
+    return None
+
+
+def resource_catalog_roots(paths: list[str]) -> list[str]:
+    roots = {root for path in paths if (root := resource_catalog_root(path)) is not None}
+    if len(roots) > MAX_RESOURCE_CATALOGS:
+        raise AdapterError("asset catalogs exceed the immutable catalog limit")
+    return sorted(roots)
+
+
+def resource_asset_set_path(path: str, root: str) -> str | None:
+    if path == root or not path.startswith(root + "/"):
+        return None
+    relative_components = path[len(root) + 1:].split("/")
+    current: list[str] = []
+    for component in relative_components[:-1]:
+        current.append(component)
+        if component.lower().endswith(ASSET_SET_SUFFIXES):
+            return root + "/" + "/".join(current)
+    return None
+
+
+def resource_asset_set_name(path: str) -> tuple[str, str]:
+    name = path.rsplit("/", 1)[-1]
+    for suffix in sorted(ASSET_SET_SUFFIXES, key=len, reverse=True):
+        if name.lower().endswith(suffix):
+            return name[:-len(suffix)], suffix
+    return name, ""
+
+
+def validate_resource_json(value: Any, label: str, depth: int = 0) -> int:
+    if depth > MAX_LOCALIZATION_NESTING:
+        raise AdapterError(f"{label} exceeds the immutable JSON nesting limit")
+    if isinstance(value, dict):
+        if len(value) > MAX_RESOURCE_JSON_NODES:
+            raise AdapterError(f"{label} exceeds the immutable JSON object limit")
+        count = 1
+        for key, child in value.items():
+            if not isinstance(key, str) or not key or len(key) > MAX_STRING_LENGTH:
+                raise AdapterError(f"{label} has an invalid JSON property name")
+            count += validate_resource_json(child, label, depth + 1)
+            if count > MAX_RESOURCE_JSON_NODES:
+                raise AdapterError(f"{label} exceeds the immutable JSON node limit")
+        return count
+    if isinstance(value, list):
+        if len(value) > MAX_RESOURCE_JSON_NODES:
+            raise AdapterError(f"{label} exceeds the immutable JSON array limit")
+        count = 1
+        for child in value:
+            count += validate_resource_json(child, label, depth + 1)
+            if count > MAX_RESOURCE_JSON_NODES:
+                raise AdapterError(f"{label} exceeds the immutable JSON node limit")
+        return count
+    if isinstance(value, str) and len(value) > MAX_STRING_LENGTH:
+        raise AdapterError(f"{label} contains an oversized JSON string")
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return 1
+    raise AdapterError(f"{label} contains an unsupported JSON value")
+
+
+def parse_resource_contents(data: bytes, label: str) -> list[str]:
+    if len(data) > MAX_RESOURCE_CONTENTS_BYTES:
+        raise AdapterError(f"{label} exceeds the immutable byte limit")
+    try:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError, AdapterError) as error:
+        raise AdapterError(f"{label} is malformed: {error}") from error
+    if not isinstance(value, dict):
+        raise AdapterError(f"{label} must have a JSON object root")
+    validate_resource_json(value, label)
+    for key in RESOURCE_JSON_ARRAY_KEYS:
+        if key in value and not isinstance(value[key], list):
+            raise AdapterError(f"{label} has an invalid {key} array")
+    if "info" in value and not isinstance(value["info"], dict):
+        raise AdapterError(f"{label} has an invalid info object")
+
+    filenames: list[str] = []
+
+    def collect(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                if key == "filename":
+                    if not isinstance(child, str) or not child.strip():
+                        raise AdapterError(f"{label} has an invalid filename reference")
+                    filenames.append(child)
+                    if len(filenames) > MAX_RESOURCE_REFERENCES:
+                        raise AdapterError(f"{label} exceeds the immutable filename reference limit")
+                collect(child)
+        elif isinstance(node, list):
+            for child in node:
+                collect(child)
+
+    collect(value)
+    return filenames
+
+
+def resource_filename_target(contents_path: str, filename: str) -> str:
+    if (
+        not filename
+        or len(filename) > MAX_STRING_LENGTH
+        or filename.startswith(("/", "~"))
+        or "\\" in filename
+    ):
+        raise AdapterError(f"{contents_path} has an unsafe filename reference")
+    components = filename.split("/")
+    if any(not component or component in {".", ".."} for component in components):
+        raise AdapterError(f"{contents_path} has a traversal or empty filename reference")
+    parent = contents_path.rsplit("/", 1)[0] if "/" in contents_path else ""
+    return "/".join([component for component in (parent, *components) if component])
+
+
+def resource_file_stem(path: str) -> str:
+    basename = path.rsplit("/", 1)[-1]
+    stem = basename.rsplit(".", 1)[0] if "." in basename else basename
+    return re.sub(r"@[23]x$", "", stem, flags=re.IGNORECASE)
+
+
+def resource_source_references(root: Path, paths: list[str]) -> list[tuple[str, str, str]]:
+    references: list[tuple[str, str, str]] = []
+    source_paths = {
+        path for path in paths
+        if Path(path).suffix.lower() in RESOURCE_SOURCE_SUFFIXES
+        and not ({component.lower() for component in path.split("/")} & RESOURCE_SOURCE_EXCLUDED_COMPONENTS)
+    }
+    if len(source_paths) > MAX_RESOURCE_SOURCE_FILES:
+        raise AdapterError("resource reference sources exceed the immutable file limit")
+    if not source_paths:
+        return references
+    output = bounded_process(
+        root,
+        [
+            "grep", "-l", "-I", "-E", "-e", RESOURCE_REFERENCE_SEARCH_PATTERN,
+            "HEAD", "--",
+            "*.swift", "*.m", "*.mm", "*.h", "*.storyboard", "*.xib",
+            ":(exclude)**/Tests/**", ":(exclude)**/UITests/**", ":(exclude)**/tests/**",
+            ":(exclude)**/uitests/**", ":(exclude)**/Fixtures/**", ":(exclude)**/fixtures/**",
+            ":(exclude)docs/**", ":(exclude).quality-control/**",
+        ],
+        MAX_GREP_OUTPUT_BYTES,
+        allowed_returncodes={0, 1},
+    )
+    try:
+        candidate_paths = {
+            line.removeprefix("HEAD:")
+            for line in output.decode("utf-8").splitlines()
+            if line
+        }
+    except UnicodeDecodeError as error:
+        raise AdapterError("resource reference search returned non-UTF-8 output") from error
+    if not candidate_paths.issubset(source_paths):
+        raise AdapterError("resource reference search returned an unexpected source path")
+    if len(candidate_paths) > MAX_RESOURCE_SOURCE_FILES:
+        raise AdapterError("resource reference sources exceed the immutable file limit")
+    total_bytes = 0
+    for path in sorted(candidate_paths):
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_RESOURCE_SOURCE_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_RESOURCE_TOTAL_BYTES:
+            raise AdapterError("resource reference sources exceed the immutable aggregate byte limit")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"resource reference source must be UTF-8 text: {path}") from error
+        for kind, pattern in RESOURCE_REFERENCE_PATTERNS:
+            for match in pattern.finditer(text):
+                references.append((path, kind, match.group("name")))
+                if len(references) > MAX_RESOURCE_REFERENCES:
+                    raise AdapterError("resource references exceed the immutable reference limit")
+    return references
+
+
+def findings_for_resource_assets(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    entries = tracked_tree_entries(root)
+    findings: list[dict[str, str]] = []
+
+    def add_finding(path: str, message: str) -> bool:
+        findings.append({"path": path, "message": message})
+        return len(findings) < MAX_FINDINGS
+
+    forbidden_suffixes = tuple(suffix.lower() for suffix in RESOURCE_BINARY_OUTPUT_SUFFIXES)
+    for path in paths:
+        if any(component.lower().endswith(forbidden) for component in path.split("/") for forbidden in forbidden_suffixes):
+            if not add_finding(path, "Tracked build or release binary output must not be committed as a resource."):
+                return findings[:MAX_FINDINGS]
+
+    roots = resource_catalog_roots(paths)
+    image_names: set[str] = set()
+    color_names: set[str] = set()
+    data_names: set[str] = set()
+    referenced_paths: set[str] = set()
+    total_bytes = 0
+    contents_count = 0
+
+    for root_path in roots:
+        if root_path in entries:
+            raise AdapterError(f"asset catalog path is a tracked file, not a directory: {root_path}")
+        catalog_prefix = root_path + "/"
+        catalog_files = [path for path in paths if path.startswith(catalog_prefix)]
+        set_paths = sorted({
+            set_path for path in catalog_files
+            if (set_path := resource_asset_set_path(path, root_path)) is not None
+        })
+        root_contents = root_path + "/Contents.json"
+        if root_contents not in entries:
+            if not add_finding(root_path, "Asset catalog is missing its root Contents.json metadata."):
+                return findings[:MAX_FINDINGS]
+
+        contents_paths = [path for path in catalog_files if path.rsplit("/", 1)[-1] == "Contents.json"]
+        contents_count += len(contents_paths)
+        if contents_count > MAX_RESOURCE_CONTENTS_FILES:
+            raise AdapterError("asset catalog Contents.json files exceed the immutable file limit")
+
+        for set_path in set_paths:
+            if set_path in entries:
+                raise AdapterError(f"asset set path is a tracked file, not a directory: {set_path}")
+            name, suffix = resource_asset_set_name(set_path)
+            if not name:
+                raise AdapterError(f"asset set has an empty logical name: {set_path}")
+            if suffix == ".colorset":
+                color_names.add(name)
+            elif suffix == ".dataset":
+                data_names.add(name)
+            else:
+                image_names.add(name)
+            expected_contents = set_path + "/Contents.json"
+            if expected_contents not in entries:
+                if not add_finding(set_path, "Asset set is missing its Contents.json metadata."):
+                    return findings[:MAX_FINDINGS]
+
+        for contents_path in sorted(contents_paths):
+            if entries.get(contents_path) not in {"100644", "100755"}:
+                raise AdapterError(f"asset metadata path is not a regular file: {contents_path}")
+            data = bounded_process(root, ["show", f"HEAD:{contents_path}"], MAX_RESOURCE_CONTENTS_BYTES)
+            total_bytes += len(data)
+            if total_bytes > MAX_RESOURCE_TOTAL_BYTES:
+                raise AdapterError("asset resources exceed the immutable aggregate byte limit")
+            filenames = parse_resource_contents(data, contents_path)
+            for filename in filenames:
+                target = resource_filename_target(contents_path, filename)
+                if target in referenced_paths:
+                    if not add_finding(contents_path, f"Asset filename is referenced more than once: {filename}"):
+                        return findings[:MAX_FINDINGS]
+                referenced_paths.add(target)
+                mode = entries.get(target)
+                if mode is None:
+                    if not add_finding(contents_path, f"Asset filename is missing from Git HEAD: {filename}"):
+                        return findings[:MAX_FINDINGS]
+                elif mode not in {"100644", "100755"}:
+                    raise AdapterError(f"asset filename resolves to a non-regular path: {target}")
+
+        for path in catalog_files:
+            if path.rsplit("/", 1)[-1] == "Contents.json":
+                continue
+            mode = entries.get(path)
+            if mode not in {"100644", "100755"}:
+                raise AdapterError(f"asset catalog contains an unsupported non-regular path: {path}")
+            if path not in referenced_paths:
+                if not add_finding(path, "Tracked asset file is not referenced by any Contents.json metadata."):
+                    return findings[:MAX_FINDINGS]
+
+    for path in paths:
+        suffix = Path(path).suffix.lower()
+        if suffix in RESOURCE_IMAGE_FILE_SUFFIXES:
+            image_names.add(resource_file_stem(path))
+        elif suffix in RESOURCE_DATA_FILE_SUFFIXES:
+            data_names.add(resource_file_stem(path))
+
+    for path, kind, name in resource_source_references(root, paths):
+        if not name:
+            if not add_finding(path, f"{kind} has an empty literal resource name."):
+                return findings[:MAX_FINDINGS]
+            continue
+        candidates = color_names if kind == "Color" else data_names if kind == "NSDataAsset" else image_names
+        if name not in candidates:
+            if not add_finding(path, f"{kind} references a missing local resource: {name}"):
+                return findings[:MAX_FINDINGS]
+    return findings
+
+
 def generated_manifest(root: Path) -> list[dict[str, str]]:
     try:
         data = bounded_process(
@@ -941,6 +1254,26 @@ def main() -> int:
                 revision,
                 "PASS",
                 "Tracked localization resources are valid and have consistent key/fallback coverage.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.RESOURCES.ASSETS":
+            findings = findings_for_resource_assets(root, paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Asset catalogs, resource references, or tracked resource binaries are invalid.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "Asset catalogs and statically discoverable resource references are valid.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0

@@ -116,8 +116,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Fix missing, duplicate, invalid, or unowned resources before merging.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/resources/passing-project/", "negative": "fixtures/resources/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.PRIVACY.MANIFEST",

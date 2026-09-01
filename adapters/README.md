@@ -75,3 +75,17 @@ python3 adapters/deterministic_checks.py \
   --catalog policies/check-catalog.json \
   --check QC.LOCALIZATION.CATALOG
 ```
+
+`QC.RESOURCES.ASSETS` validates tracked Xcode asset catalogs and high-confidence literal resource
+references. It parses bounded `Contents.json` metadata, requires metadata for known asset-set
+directories, rejects traversal, symlink, malformed, unsupported, and oversized inputs as `BLOCKED`,
+and reports missing or duplicate filenames, orphan files, forbidden compiled outputs, and missing
+literal `Image`, `Color`, `UIImage(named:)`, `NSImage(named:)`, or `NSDataAsset(name:)` resources as
+`FAIL`. Dynamic names and runtime bundle membership remain outside the static claim.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.RESOURCES.ASSETS
+```
