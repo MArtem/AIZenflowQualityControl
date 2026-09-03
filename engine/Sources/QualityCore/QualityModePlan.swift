@@ -136,23 +136,19 @@ public enum QualityModePlanner {
                 remediation: "Add an explicit tests applicability record before selecting build-and-tests."
             )
         }
-        guard applicability.status == .applicable else {
-            return QualityModeStep(
-                id: "QC.MODE.TESTS",
-                command: "xcode-tests",
-                action: .localTestExecution,
-                status: .notApplicable,
-                applicability: applicability.status.rawValue,
-                remediation: applicability.revisitCondition
-            )
-        }
+        let outcome = applicabilityOutcome(
+            applicability: applicability,
+            action: .localTestExecution,
+            profile: profile,
+            applicableRemediation: "Run only with explicit test permission and bind terminal test evidence."
+        )
         return QualityModeStep(
             id: "QC.MODE.TESTS",
             command: "xcode-tests",
             action: .localTestExecution,
-            status: .notRunByUserDecision,
-            applicability: "applicable",
-            remediation: "Run only with explicit test permission and bind terminal test evidence."
+            status: outcome.status,
+            applicability: applicability.status.rawValue,
+            remediation: outcome.remediation
         )
     }
 
@@ -171,16 +167,51 @@ public enum QualityModePlanner {
                 action: action,
                 status: .blocked,
                 applicability: "unknown",
-                remediation: "Add an explicit applicability record for (capability.rawValue)."
+                remediation: "Add an explicit applicability record for \(capability.rawValue)."
             )
         }
+        let outcome = applicabilityOutcome(
+            applicability: applicability,
+            action: action,
+            profile: profile,
+            applicableRemediation: remediation
+        )
         return QualityModeStep(
             id: id,
             command: command,
             action: action,
-            status: applicability.status == .applicable ? .notRunByUserDecision : .notApplicable,
+            status: outcome.status,
             applicability: applicability.status.rawValue,
-            remediation: applicability.status == .applicable ? remediation : applicability.revisitCondition
+            remediation: outcome.remediation
         )
+    }
+
+    private static func applicabilityOutcome(
+        applicability: CapabilityApplicability,
+        action: PermissionAction?,
+        profile: ProjectProfile,
+        applicableRemediation: String
+    ) -> (status: GateStatus, remediation: String) {
+        switch applicability.status {
+        case .applicable:
+            if let action,
+               PermissionEvaluator.requirement(for: action, policy: profile.permissions) == .prohibited {
+                return (
+                    .blocked,
+                    "The profile prohibits \(action.rawValue); no execution may be attempted."
+                )
+            }
+            return (.notRunByUserDecision, applicableRemediation)
+        case .notApplicable:
+            return (
+                .notApplicable,
+                "Not applicable: \(applicability.reason) Revisit condition: \(applicability.revisitCondition)."
+            )
+        case .deferred:
+            return (
+                .notRunByUserDecision,
+                "Deferred: \(applicability.reason) Owner: \(applicability.owner). Revisit condition: \(applicability.revisitCondition)."
+            )
+        }
     }
 }
