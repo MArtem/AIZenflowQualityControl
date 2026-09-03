@@ -121,10 +121,10 @@
     },
     {
       "id": "QC.PRIVACY.MANIFEST",
-      "scope": "Privacy manifest, required-reason API, and declared data lifecycle alignment",
+      "scope": "Tracked PrivacyInfo.xcprivacy structure, supported keys, value types, and bounded duplicates",
       "severity": "block",
       "applicability": "profile",
-      "remediation": "Reconcile privacy manifests, labels, required-reason APIs, and data handling.",
+      "remediation": "Fix malformed, unsupported, duplicate, or out-of-bounds privacy manifest structure; review API/data-use alignment separately.",
       "fixture": { "positive": "fixtures/privacy/passing-project/", "negative": "fixtures/privacy/failing-project/" },
       "implementation": "implemented"
     },
