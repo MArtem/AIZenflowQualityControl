@@ -105,3 +105,19 @@ python3 adapters/deterministic_checks.py \
   --tool-version 6.3.0 \
   --configuration-path .swift-format.json
 ```
+
+`QC.PRIVACY.MANIFEST` validates every tracked `PrivacyInfo.xcprivacy` file as a bounded property
+list. It rejects malformed or duplicate-key plists, unexpected keys, wrong value types, duplicate
+categories, empty/duplicate arrays, invalid tracking-domain shapes, and non-standard manifest file
+names as `BLOCKED`. The accepted structure covers Apple's four manifest keys:
+`NSPrivacyTracking`, `NSPrivacyTrackingDomains`, `NSPrivacyCollectedDataTypes`, and
+`NSPrivacyAccessedAPITypes`. The adapter does not infer API usage, target/bundle membership,
+required-reason approval, collected-data truth, runtime lifecycle, SDK coverage, or App Store
+acceptance. A repository without a tracked manifest returns `PASS` with those limits stated.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.PRIVACY.MANIFEST
+```

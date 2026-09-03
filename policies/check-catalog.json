@@ -125,8 +125,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Reconcile privacy manifests, labels, required-reason APIs, and data handling.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/privacy/passing-project/", "negative": "fixtures/privacy/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.CONFIGURATION.SIGNING",

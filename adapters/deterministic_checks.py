@@ -47,6 +47,11 @@ MAX_LOCALIZATION_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_LOCALIZATION_KEYS = 8_192
 MAX_LOCALIZATION_LOCALES = 64
 MAX_LOCALIZATION_NESTING = 32
+MAX_PRIVACY_MANIFESTS = 256
+MAX_PRIVACY_MANIFEST_BYTES = 512 * 1024
+MAX_PRIVACY_ARRAY_ITEMS = 128
+MAX_PRIVACY_PLIST_NODES = 20_000
+MAX_PRIVACY_PLIST_NESTING = 32
 MAX_RESOURCE_CATALOGS = 256
 MAX_RESOURCE_CONTENTS_FILES = 2_048
 MAX_RESOURCE_CONTENTS_BYTES = 512 * 1024
@@ -895,6 +900,145 @@ def findings_for_localization_catalog(root: Path, paths: list[str]) -> list[dict
     return findings
 
 
+def privacy_manifest_paths(paths: list[str]) -> list[str]:
+    candidates = sorted(path for path in paths if path.lower().endswith(".xcprivacy"))
+    if len(candidates) > MAX_PRIVACY_MANIFESTS:
+        raise AdapterError("privacy manifests exceed the immutable file limit")
+    invalid_names = [path for path in candidates if Path(path).name != "PrivacyInfo.xcprivacy"]
+    if invalid_names:
+        raise AdapterError(
+            f"privacy manifest must use the required PrivacyInfo.xcprivacy name: {invalid_names[0]}"
+        )
+    return candidates
+
+
+def privacy_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AdapterError(f"{label} must be a non-empty string")
+    if len(value.encode("utf-8")) > MAX_STRING_LENGTH:
+        raise AdapterError(f"{label} exceeds the immutable string limit")
+    if any(ord(character) < 0x20 for character in value):
+        raise AdapterError(f"{label} contains a control character")
+    return value
+
+
+def privacy_string_array(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or not value or len(value) > MAX_PRIVACY_ARRAY_ITEMS:
+        raise AdapterError(f"{label} must be a bounded non-empty array")
+    values = [privacy_string(item, f"{label}[{index}]") for index, item in enumerate(value)]
+    if len(set(values)) != len(values):
+        raise AdapterError(f"{label} contains duplicate values")
+    return values
+
+
+def reject_duplicate_privacy_plist_keys(
+    node: ElementTree.Element,
+    label: str,
+    depth: int = 0,
+) -> int:
+    if depth > MAX_PRIVACY_PLIST_NESTING:
+        raise AdapterError(f"{label} exceeds the immutable plist nesting limit")
+    local_name = node.tag.rsplit("}", 1)[-1]
+    if local_name == "dict":
+        children = list(node)
+        keys = [child.text for child in children if child.tag.rsplit("}", 1)[-1] == "key"]
+        if len(keys) != len(set(keys)):
+            raise AdapterError(f"{label} contains duplicate plist keys")
+    node_count = 1
+    for child in node:
+        node_count += reject_duplicate_privacy_plist_keys(child, label, depth + 1)
+        if node_count > MAX_PRIVACY_PLIST_NODES:
+            raise AdapterError(f"{label} exceeds the immutable plist node limit")
+    return node_count
+
+
+def parse_privacy_manifest(data: bytes, label: str) -> None:
+    if len(data) > MAX_PRIVACY_MANIFEST_BYTES:
+        raise AdapterError(f"{label} exceeds the immutable byte limit")
+    if data.lstrip().startswith(b"<"):
+        try:
+            xml_root = ElementTree.fromstring(data)
+            reject_duplicate_privacy_plist_keys(xml_root, label)
+        except ElementTree.ParseError as error:
+            raise AdapterError(f"{label} is malformed: {error}") from error
+    try:
+        value = plistlib.loads(data)
+    except (ExpatError, plistlib.InvalidFileException, OverflowError, RecursionError, TypeError, ValueError) as error:
+        raise AdapterError(f"{label} is malformed: {error}") from error
+    if not isinstance(value, dict):
+        raise AdapterError(f"{label} root must be a dictionary")
+
+    allowed = {
+        "NSPrivacyTracking",
+        "NSPrivacyTrackingDomains",
+        "NSPrivacyCollectedDataTypes",
+        "NSPrivacyAccessedAPITypes",
+    }
+    if any(not isinstance(key, str) for key in value):
+        raise AdapterError(f"{label} contains a non-string key")
+    unknown = set(value) - allowed
+    if unknown:
+        raise AdapterError(f"{label} contains unsupported keys: {', '.join(sorted(unknown)[:4])}")
+
+    tracking = value.get("NSPrivacyTracking")
+    if tracking is not None and type(tracking) is not bool:
+        raise AdapterError(f"{label} NSPrivacyTracking must be a boolean")
+    domains = value.get("NSPrivacyTrackingDomains")
+    if domains is not None:
+        if tracking is not True:
+            raise AdapterError(f"{label} declares tracking domains without NSPrivacyTracking=true")
+        for index, domain in enumerate(privacy_string_array(domains, f"{label} NSPrivacyTrackingDomains")):
+            if any(character.isspace() for character in domain) or "://" in domain or "/" in domain:
+                raise AdapterError(f"{label} NSPrivacyTrackingDomains[{index}] is not a host-shaped value")
+
+    collected = value.get("NSPrivacyCollectedDataTypes")
+    if collected is not None:
+        if not isinstance(collected, list) or len(collected) > MAX_PRIVACY_ARRAY_ITEMS:
+            raise AdapterError(f"{label} NSPrivacyCollectedDataTypes exceeds the immutable item limit")
+        seen_types: set[str] = set()
+        expected_keys = {
+            "NSPrivacyCollectedDataType",
+            "NSPrivacyCollectedDataTypeLinked",
+            "NSPrivacyCollectedDataTypeTracking",
+            "NSPrivacyCollectedDataTypePurposes",
+        }
+        for index, entry in enumerate(collected):
+            entry_label = f"{label} NSPrivacyCollectedDataTypes[{index}]"
+            if not isinstance(entry, dict) or set(entry) != expected_keys:
+                raise AdapterError(f"{entry_label} has an unsupported key set")
+            data_type = privacy_string(entry["NSPrivacyCollectedDataType"], f"{entry_label} type")
+            if data_type in seen_types:
+                raise AdapterError(f"{label} contains duplicate collected data type: {data_type}")
+            seen_types.add(data_type)
+            for field in ("NSPrivacyCollectedDataTypeLinked", "NSPrivacyCollectedDataTypeTracking"):
+                if type(entry[field]) is not bool:
+                    raise AdapterError(f"{entry_label} {field} must be a boolean")
+            privacy_string_array(entry["NSPrivacyCollectedDataTypePurposes"], f"{entry_label} purposes")
+
+    accessed = value.get("NSPrivacyAccessedAPITypes")
+    if accessed is not None:
+        if not isinstance(accessed, list) or len(accessed) > MAX_PRIVACY_ARRAY_ITEMS:
+            raise AdapterError(f"{label} NSPrivacyAccessedAPITypes exceeds the immutable item limit")
+        seen_api_types: set[str] = set()
+        expected_keys = {"NSPrivacyAccessedAPIType", "NSPrivacyAccessedAPITypeReasons"}
+        for index, entry in enumerate(accessed):
+            entry_label = f"{label} NSPrivacyAccessedAPITypes[{index}]"
+            if not isinstance(entry, dict) or set(entry) != expected_keys:
+                raise AdapterError(f"{entry_label} has an unsupported key set")
+            api_type = privacy_string(entry["NSPrivacyAccessedAPIType"], f"{entry_label} type")
+            if api_type in seen_api_types:
+                raise AdapterError(f"{label} contains duplicate accessed API type: {api_type}")
+            seen_api_types.add(api_type)
+            privacy_string_array(entry["NSPrivacyAccessedAPITypeReasons"], f"{entry_label} reasons")
+
+
+def findings_for_privacy_manifests(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    for path in privacy_manifest_paths(paths):
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_PRIVACY_MANIFEST_BYTES)
+        parse_privacy_manifest(data, path)
+    return []
+
+
 def resource_catalog_root(path: str) -> str | None:
     components = path.split("/")
     for index, component in enumerate(components):
@@ -1456,6 +1600,26 @@ def main() -> int:
                 revision,
                 "PASS",
                 "Asset catalogs and statically discoverable resource references are valid.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.PRIVACY.MANIFEST":
+            findings = findings_for_privacy_manifests(root, paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Privacy manifests contain structural findings.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "Tracked PrivacyInfo.xcprivacy files are structurally valid; target membership, API usage, data lifecycle, and App Store compliance remain unproven.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
