@@ -46,10 +46,12 @@ public struct QualityModePlan: Codable, Sendable {
         self.steps = steps
         if steps.contains(where: { $0.status == .blocked }) {
             status = .blocked
-        } else if steps.contains(where: { $0.status == .skipped }) {
-            status = .skipped
+        } else if steps.contains(where: { $0.status == .fail }) {
+            status = .fail
         } else if steps.contains(where: { $0.status == .notRunByUserDecision }) {
             status = .notRunByUserDecision
+        } else if steps.contains(where: { $0.status == .skipped }) {
+            status = .skipped
         } else {
             status = .pass
         }
