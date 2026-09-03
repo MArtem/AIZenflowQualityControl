@@ -176,7 +176,7 @@ private func emitModeExecution(_ result: QualityModeExecutionResult) -> Never {
        let output = String(data: data, encoding: .utf8) {
         print(output)
     } else {
-        print(#"{"command":"mode-execute","mode":"static","schemaVersion":1,"status":"BLOCKED","steps":[{"command":"mode-execute","evidence":null,"id":"QC.MODE.EXECUTION.OUTPUT_FAILURE","message":"Mode execution output could not be encoded within its bounded envelope.","report":null,"status":"BLOCKED","verification":null}]}"#)
+        print(#"{"command":"mode-execute","mode":"\#(result.mode.rawValue)","schemaVersion":1,"status":"BLOCKED","steps":[{"command":"mode-execute","evidence":null,"id":"QC.MODE.EXECUTION.OUTPUT_FAILURE","message":"Mode execution output could not be encoded within its bounded envelope.","report":null,"status":"BLOCKED","verification":null}]}"#)
         exit(2)
     }
 
@@ -1143,6 +1143,7 @@ do {
         emitModePlan(QualityCommands.modePlan(at: fileURL(profile), mode: mode))
 
     case "mode-execute":
+        var requestedMode = QualityMode.static
         do {
             let options = try parseOptions(
                 arguments.dropFirst(2),
@@ -1162,6 +1163,7 @@ do {
                     message: "Mode must be static, build, build-and-tests, or full."
                 ))
             }
+            requestedMode = mode
             let requiredStaticOptions = [
                 "--policy", "--repository-root", "--engine-repository-root", "--snapshot-root",
                 "--source-repository", "--expected-source-revision", "--expected-engine-revision",
@@ -1180,7 +1182,7 @@ do {
             switch error {
             case let .message(message):
                 emitModeExecution(modeExecutionBlocked(
-                    mode: .static,
+                    mode: requestedMode,
                     id: "QC.CLI.INVALID_ARGUMENTS",
                     message: message
                 ))
