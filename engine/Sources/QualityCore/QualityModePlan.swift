@@ -90,6 +90,14 @@ public enum QualityModePlanner {
         }
 
         steps.append(testStep(for: profile))
+        steps.append(capabilityStep(
+            id: "QC.MODE.SNAPSHOT_TESTS",
+            command: "snapshot-tests",
+            action: .localTestExecution,
+            capability: .snapshotTests,
+            profile: profile,
+            remediation: "Run only with explicit test permission and bind snapshot-test evidence."
+        ))
 
         guard mode == .full else {
             return QualityModePlan(mode: mode, steps: steps)
@@ -123,6 +131,21 @@ public enum QualityModePlanner {
             capability: .privacy,
             profile: profile,
             remediation: "Review privacy applicability and reconcile manifests, labels, and data lifecycle."
+        ))
+        steps.append(capabilityStep(
+            id: "QC.MODE.OBSERVABILITY",
+            command: "observability-review",
+            capability: .observability,
+            profile: profile,
+            remediation: "Review observability applicability and record safe, privacy-preserving telemetry boundaries."
+        ))
+        steps.append(capabilityStep(
+            id: "QC.MODE.PLATFORM_CAPABILITIES",
+            command: "platform-capabilities-review",
+            action: .simulatorOrDevice,
+            capability: .platformCapabilities,
+            profile: profile,
+            remediation: "Review platform-capability applicability and bind any Simulator/device evidence separately."
         ))
         return QualityModePlan(mode: mode, steps: steps)
     }

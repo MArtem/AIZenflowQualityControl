@@ -121,10 +121,11 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
   PASS evidence.
 - `mode-execute` runs the existing authenticated `static-evidence` boundary and, for modes beyond
   `static`, the authenticated `build-evidence` boundary in order. A failed or blocked prerequisite
-  skips later steps. Tests, UI tests, archive/signing, feature-flag, and privacy steps are emitted
-  as explicit `NOT_RUN_BY_USER_DECISION`, `NOT_APPLICABLE`, or `BLOCKED` until their dedicated
-  evidence boundaries exist. Child evidence remains attached to each step; the mode envelope never
-  infers composite evidence or a trusted expectation.
+  skips later steps. Test, snapshot-test, UI-test, archive/signing, feature-flag, privacy,
+  observability, and platform-capability steps are emitted as explicit
+  `NOT_RUN_BY_USER_DECISION`, `NOT_APPLICABLE`, or `BLOCKED` until their dedicated evidence
+  boundaries exist. Child evidence remains attached to each step; the mode envelope never infers
+  composite evidence or a trusted expectation.
 - `static` performs only deterministic file-size, forbidden-artifact, source-boundary, and symlink
   checks from explicit profile and policy inputs. Schema version 2 remains blocked by default until
   Xcode build-graph membership is authenticated. The explicit `--scope explicit-source-paths`
