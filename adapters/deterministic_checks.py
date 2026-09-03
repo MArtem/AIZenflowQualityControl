@@ -922,9 +922,11 @@ def privacy_string(value: Any, label: str) -> str:
     return value
 
 
-def privacy_string_array(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list) or not value or len(value) > MAX_PRIVACY_ARRAY_ITEMS:
-        raise AdapterError(f"{label} must be a bounded non-empty array")
+def privacy_string_array(value: Any, label: str, require_nonempty: bool = True) -> list[str]:
+    if not isinstance(value, list) or len(value) > MAX_PRIVACY_ARRAY_ITEMS:
+        raise AdapterError(f"{label} must be a bounded array")
+    if require_nonempty and not value:
+        raise AdapterError(f"{label} must be non-empty")
     values = [privacy_string(item, f"{label}[{index}]") for index, item in enumerate(value)]
     if len(set(values)) != len(values):
         raise AdapterError(f"{label} contains duplicate values")
@@ -985,9 +987,14 @@ def parse_privacy_manifest(data: bytes, label: str) -> None:
         raise AdapterError(f"{label} NSPrivacyTracking must be a boolean")
     domains = value.get("NSPrivacyTrackingDomains")
     if domains is not None:
-        if tracking is not True:
+        domain_values = privacy_string_array(
+            domains,
+            f"{label} NSPrivacyTrackingDomains",
+            require_nonempty=False,
+        )
+        if domain_values and tracking is not True:
             raise AdapterError(f"{label} declares tracking domains without NSPrivacyTracking=true")
-        for index, domain in enumerate(privacy_string_array(domains, f"{label} NSPrivacyTrackingDomains")):
+        for index, domain in enumerate(domain_values):
             if any(character.isspace() for character in domain) or "://" in domain or "/" in domain:
                 raise AdapterError(f"{label} NSPrivacyTrackingDomains[{index}] is not a host-shaped value")
 
