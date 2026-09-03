@@ -86,6 +86,11 @@ metadata, safe filename ownership, high-confidence literal resource references, 
 compiled resource outputs. Malformed, unsupported, oversized, traversal, or symlink inputs are
 `BLOCKED`; missing, duplicate, orphan, or forbidden resources are `FAIL`.
 
+The same schema permits `QC.FORMAT.SWIFTFORMAT`. Its optional `tool` object records the executable
+name, caller-verified version, and SHA-256 digest; its optional `configuration` object records the
+tracked configuration path and digest. The adapter scans only clean Git-HEAD Swift bytes through
+stdin and never writes or formats in place.
+
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.
 The envelope never infers a composite evidence claim; callers needing one must supply an explicit

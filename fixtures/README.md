@@ -37,3 +37,8 @@ filename is present, and matching literal `Image`/`Color` references. `resources
 contains a missing asset filename and a tracked compiled `.car` output; the resources adapter must
 return `FAIL`. Malformed JSON, traversal, duplicate references, symlink, orphan, and loose-resource
 cases are covered by focused adapter tests.
+
+`format/passing-project/` contains a tracked bounded SwiftFormat configuration and already formatted
+Swift source. `format/failing-project/` uses the same configuration with spacing and indentation
+violations; a caller-pinned `swift-format` invocation must return `FAIL` without modifying either
+fixture.

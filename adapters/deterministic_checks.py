@@ -17,6 +17,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from xml.parsers.expat import ExpatError
@@ -54,6 +55,14 @@ MAX_RESOURCE_JSON_NODES = 20_000
 MAX_RESOURCE_REFERENCES = 4_096
 MAX_RESOURCE_SOURCE_BYTES = 1 * 1024 * 1024
 MAX_RESOURCE_SOURCE_FILES = 4_096
+MAX_FORMAT_FILES = 4_096
+MAX_FORMAT_FILE_BYTES = 2 * 1024 * 1024
+MAX_FORMAT_TOTAL_BYTES = 32 * 1024 * 1024
+MAX_FORMAT_OUTPUT_BYTES = 64 * 1024
+MAX_FORMAT_TOOL_BYTES = 256 * 1024 * 1024
+MAX_FORMAT_TOOL_VERSION_BYTES = 4 * 1024
+MAX_FORMAT_TOTAL_SECONDS = 120
+MAX_FORMAT_COMMAND_TIMEOUT_SECONDS = 5
 ASSET_SET_SUFFIXES = (
     ".appiconset", ".colorset", ".dataset", ".imageset", ".imagestack", ".launchimage",
     ".stickerpack", ".symbolset", ".arreferenceimage", ".reality", ".texture", ".spriteatlas",
@@ -125,7 +134,7 @@ def load_json(path: Path) -> dict[str, Any]:
         raise AdapterError("catalog exceeds the immutable byte limit")
     try:
         value = json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError, AdapterError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, AdapterError) as error:
         raise AdapterError(f"catalog is malformed: {error}") from error
     if not isinstance(value, dict):
         raise AdapterError("catalog root must be an object")
@@ -226,6 +235,156 @@ def current_revision(root: Path) -> str:
     if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
         raise AdapterError("Git HEAD is not a lowercase 40-character SHA")
     return revision
+
+
+def format_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for key in tuple(environment):
+        if key.startswith(("GIT_", "DYLD_", "SWIFT_", "XCODE_")):
+            environment.pop(key, None)
+    environment.update({"LC_ALL": "C", "LANG": "C", "TERM": "dumb", "GIT_CONFIG_NOSYSTEM": "1"})
+    return environment
+
+
+def sha256_file(path: Path, maximum_bytes: int) -> str:
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                total += len(chunk)
+                if total > maximum_bytes:
+                    raise AdapterError("format tool exceeds the immutable byte limit")
+                digest.update(chunk)
+    except OSError as error:
+        raise AdapterError(f"format tool is unreadable: {error}") from error
+    return digest.hexdigest()
+
+
+def format_tool(path_value: str, expected_version: str) -> tuple[Path, dict[str, str]]:
+    if not path_value.startswith("/") or len(path_value) > MAX_STRING_LENGTH:
+        raise AdapterError("format tool path must be an absolute bounded path")
+    path = Path(path_value)
+    if path.is_symlink() or not path.is_file():
+        raise AdapterError("format tool must be a regular non-symlink file")
+    try:
+        stat_result = path.stat()
+    except OSError as error:
+        raise AdapterError(f"format tool metadata is unreadable: {error}") from error
+    if stat_result.st_mode & 0o111 == 0:
+        raise AdapterError("format tool is not executable")
+    if stat_result.st_size > MAX_FORMAT_TOOL_BYTES:
+        raise AdapterError("format tool exceeds the immutable byte limit")
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+/-]{0,127}", expected_version):
+        raise AdapterError("expected format tool version is malformed")
+    try:
+        version_result = subprocess.run(
+            [str(path), "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=format_environment(),
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError(f"format tool version command failed: {error}") from error
+    if (
+        version_result.returncode != 0
+        or len(version_result.stdout) > MAX_FORMAT_TOOL_VERSION_BYTES
+        or len(version_result.stderr) > MAX_GREP_OUTPUT_BYTES
+    ):
+        raise AdapterError("format tool version command failed")
+    try:
+        version = version_result.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise AdapterError("format tool version output is not UTF-8") from error
+    if version != expected_version:
+        raise AdapterError(f"format tool version mismatch: expected {expected_version}, observed {version}")
+    return path, {
+        "name": path.name,
+        "version": version,
+        "sha256": sha256_file(path, MAX_FORMAT_TOOL_BYTES),
+    }
+
+
+def format_configuration(root: Path, paths: list[str], path_value: str) -> tuple[str, dict[str, str]]:
+    if not path_value or path_value.startswith(("/", "~")) or "\\" in path_value:
+        raise AdapterError("format configuration path must be a tracked relative path")
+    if any(part in ("", ".", "..") for part in path_value.split("/")):
+        raise AdapterError("format configuration path contains traversal or empty segments")
+    if path_value not in paths:
+        raise AdapterError("format configuration must be tracked in Git HEAD")
+    entries = tracked_tree_entries(root)
+    if entries.get(path_value) not in {"100644", "100755"}:
+        raise AdapterError("format configuration must be a regular Git-tree file")
+    data = bounded_process(root, ["show", f"HEAD:{path_value}"], MAX_FORMAT_FILE_BYTES)
+    try:
+        text = data.decode("utf-8")
+        value = json.loads(text, object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, AdapterError) as error:
+        raise AdapterError("format configuration must be valid UTF-8 JSON") from error
+    if not isinstance(value, dict):
+        raise AdapterError("format configuration root must be a JSON object")
+    return text, {"path": path_value, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def format_source_paths(root: Path, paths: list[str]) -> list[str]:
+    sources = sorted(path for path in paths if Path(path).suffix == ".swift")
+    if len(sources) > MAX_FORMAT_FILES:
+        raise AdapterError("tracked Swift sources exceed the immutable file limit")
+    entries = tracked_tree_entries(root)
+    if any(entries.get(path) not in {"100644", "100755"} for path in sources):
+        raise AdapterError("tracked Swift source must be a regular Git-tree file")
+    return sources
+
+
+def findings_for_swift_format(
+    root: Path,
+    paths: list[str],
+    tool_path: Path,
+    configuration: str,
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    total_bytes = 0
+    deadline = time.monotonic() + MAX_FORMAT_TOTAL_SECONDS
+    for path in format_source_paths(root, paths):
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_FORMAT_FILE_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_FORMAT_TOTAL_BYTES:
+            raise AdapterError("tracked Swift sources exceed the immutable aggregate byte limit")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AdapterError("format check exceeded the immutable time limit")
+        try:
+            result = subprocess.run(
+                [
+                    str(tool_path), "lint", "--strict", "--no-color-diagnostics",
+                    "--configuration", configuration, "--assume-filename", path, "-",
+                ],
+                input=data,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=format_environment(),
+                timeout=min(MAX_FORMAT_COMMAND_TIMEOUT_SECONDS, remaining),
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise AdapterError(f"format tool execution failed for {path}: {error}") from error
+        if len(result.stdout) > MAX_FORMAT_OUTPUT_BYTES or len(result.stderr) > MAX_FORMAT_OUTPUT_BYTES:
+            raise AdapterError("format tool output exceeded the immutable limit")
+        if result.returncode == 0:
+            continue
+        if result.returncode != 1:
+            raise AdapterError(f"format tool returned infrastructure exit {result.returncode} for {path}")
+        diagnostic = (result.stderr + result.stdout).decode("utf-8", errors="replace").strip()
+        findings.append({
+            "path": path,
+            "message": (diagnostic or "SwiftFormat reported a formatting diagnostic.")[:MAX_STRING_LENGTH],
+        })
+        if len(findings) >= MAX_FINDINGS:
+            break
+    return findings
 
 
 def catalog_entry(catalog: dict[str, Any], check_id: str) -> None:
@@ -1158,11 +1317,30 @@ def findings_for_generated_ownership(root: Path) -> list[dict[str, str]]:
     return findings
 
 
-def report(check_id: str, revision: str, status: str, message: str, findings: list[dict[str, str]] | None = None) -> dict[str, Any]:
+def report(
+    check_id: str,
+    revision: str,
+    status: str,
+    message: str,
+    findings: list[dict[str, str]] | None = None,
+    tool: dict[str, str] | None = None,
+    configuration: dict[str, str] | None = None,
+) -> dict[str, Any]:
     check: dict[str, Any] = {"id": check_id, "status": status, "message": message}
     if findings:
         check["findings"] = findings
-    return {"schemaVersion": 1, "command": "deterministic-checks", "status": status, "sourceRevision": revision, "checks": [check]}
+    result: dict[str, Any] = {
+        "schemaVersion": 1,
+        "command": "deterministic-checks",
+        "status": status,
+        "sourceRevision": revision,
+        "checks": [check],
+    }
+    if tool is not None:
+        result["tool"] = tool
+    if configuration is not None:
+        result["configuration"] = configuration
+    return result
 
 
 def main() -> int:
@@ -1170,6 +1348,9 @@ def main() -> int:
     parser.add_argument("--repository-root", required=True)
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--check", required=True)
+    parser.add_argument("--tool-path")
+    parser.add_argument("--tool-version")
+    parser.add_argument("--configuration-path")
     arguments = parser.parse_args()
     root = Path(arguments.repository_root).resolve()
     try:
@@ -1274,6 +1455,38 @@ def main() -> int:
                 revision,
                 "PASS",
                 "Asset catalogs and statically discoverable resource references are valid.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.FORMAT.SWIFTFORMAT":
+            if not arguments.tool_path or not arguments.tool_version or not arguments.configuration_path:
+                raise AdapterError(
+                    "QC.FORMAT.SWIFTFORMAT requires --tool-path, --tool-version, and --configuration-path"
+                )
+            tool_path, tool_info = format_tool(arguments.tool_path, arguments.tool_version)
+            configuration, configuration_info = format_configuration(
+                root, paths, arguments.configuration_path
+            )
+            findings = findings_for_swift_format(root, paths, tool_path, configuration)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "SwiftFormat reported diagnostics for tracked Swift sources.",
+                    findings,
+                    tool=tool_info,
+                    configuration=configuration_info,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "All tracked Swift sources passed the caller-pinned SwiftFormat check.",
+                tool=tool_info,
+                configuration=configuration_info,
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0

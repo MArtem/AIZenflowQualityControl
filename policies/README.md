@@ -42,3 +42,9 @@ literal resource references. Malformed, unsupported, oversized, traversal, or sy
 `BLOCKED`; missing/duplicate/orphan resources, missing literal references, and compiled binary
 outputs are `FAIL`. Dynamic names, runtime bundle membership, and visual/linguistic correctness
 remain outside the static claim.
+
+`QC.FORMAT.SWIFTFORMAT` is an executable, repository-neutral adapter. It requires a caller-pinned
+regular `swift-format` executable and exact expected version, plus a tracked JSON configuration.
+It lints only regular Swift files from a clean Git `HEAD` through stdin and records tool/configuration
+digests. Formatter diagnostics are `FAIL`; missing, malformed, mismatched, unavailable, or
+resource-limited inputs are `BLOCKED`. It never performs in-place formatting.

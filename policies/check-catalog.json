@@ -71,8 +71,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Run the pinned formatter locally and commit the resulting formatting changes.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/format/passing-project/", "negative": "fixtures/format/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.LINT.SWIFTLINT",

@@ -9,7 +9,7 @@ execution.
 
 ## Current adapter
 
-`deterministic_checks.py` exposes the first catalog-backed adapter:
+`deterministic_checks.py` exposes the catalog-backed adapters:
 `QC.SECRETS.TRACKED`. It requires a clean Git checkout and scans the exact `HEAD`, so a result is
 deterministic and cannot silently include uncommitted or untracked material. It flags only
 high-confidence private-key/credential markers and credential-shaped `.p12`, `.pfx`, and
@@ -88,4 +88,20 @@ python3 adapters/deterministic_checks.py \
   --repository-root <repository> \
   --catalog policies/check-catalog.json \
   --check QC.RESOURCES.ASSETS
+```
+
+`QC.FORMAT.SWIFTFORMAT` runs a caller-pinned `swift-format` executable in check-only mode over
+regular Swift files from the clean Git `HEAD`. The expected tool version and a tracked JSON
+configuration are mandatory; the result records the tool and configuration SHA-256 identities.
+Tool/configuration mismatch, malformed inputs, time/resource exhaustion, or tool infrastructure
+failure is `BLOCKED`; formatter diagnostics are `FAIL`. The adapter never writes files.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.FORMAT.SWIFTFORMAT \
+  --tool-path /absolute/path/to/swift-format \
+  --tool-version 6.3.0 \
+  --configuration-path .swift-format.json
 ```
