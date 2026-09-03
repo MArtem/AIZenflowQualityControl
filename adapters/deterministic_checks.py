@@ -366,6 +366,7 @@ def findings_for_swift_format(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=format_environment(),
+                cwd=str(root),
                 timeout=min(MAX_FORMAT_COMMAND_TIMEOUT_SECONDS, remaining),
                 check=False,
             )
