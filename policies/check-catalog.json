@@ -147,6 +147,24 @@
       "implementation": "implemented"
     },
     {
+      "id": "QC.STATIC.SWIFT_HOT_PATH",
+      "scope": "High-confidence synchronous or blocking file, image, PDF, and video operations in shipped Swift source",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Move expensive or blocking work behind an explicit cancellable asynchronous ownership boundary; do not suppress the finding.",
+      "fixture": { "positive": "fixtures/swift-hot-path/passing-project/", "negative": "fixtures/swift-hot-path/failing-project/" },
+      "implementation": "implemented"
+    },
+    {
+      "id": "QC.STATIC.SWIFT_CONCURRENCY_ESCAPE",
+      "scope": "Forbidden Swift concurrency escape hatches in shipped source",
+      "severity": "block",
+      "applicability": "profile",
+      "remediation": "Resolve isolation and sendability through a compiler-verifiable actor, value, or ownership boundary; do not use escape-hatch attributes.",
+      "fixture": { "positive": "fixtures/swift-concurrency-escape/passing-project/", "negative": "fixtures/swift-concurrency-escape/failing-project/" },
+      "implementation": "implemented"
+    },
+    {
       "id": "QC.TODO.OWNER",
       "scope": "Tracked TODO/FIXME markers without owner, ticket, or expiry",
       "severity": "block",

@@ -53,3 +53,9 @@ resource-limited inputs are `BLOCKED`. It never performs in-place formatting.
 lists exact release-sensitive paths and is required to be byte-identical in the trusted ancestor
 and `HEAD`. The adapter reports changed paths as `FAIL`, malformed or untrusted inputs as `BLOCKED`,
 and no changes as `PASS`; it never infers signing correctness or release authorization.
+
+`QC.STATIC.SWIFT_HOT_PATH` and `QC.STATIC.SWIFT_CONCURRENCY_ESCAPE` are executable,
+repository-neutral shipped-source gates. The first blocks only high-confidence synchronous or
+blocking media/file operations; the second blocks known Swift concurrency escape hatches. Both
+operate on clean Git `HEAD`, exclude tests/fixtures/documentation, fail closed on malformed or
+oversized input, and provide no suppression mechanism.

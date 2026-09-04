@@ -152,3 +152,28 @@ python3 adapters/deterministic_checks.py \
   --check QC.TESTS.DISABLED \
   --test-path Tests
 ```
+
+`QC.STATIC.SWIFT_HOT_PATH` scans shipped Swift sources from the clean Git `HEAD` and blocks only
+high-confidence synchronous file/data reads, image-file decoding, PDF URL loads, and blocking
+`copyCGImage` extraction. Tests, fixtures, comments, and documentation are outside the claim;
+the adapter deliberately does not block the legitimate asynchronous `AVAssetImageGenerator`
+`image(at:)` API. It never infers product intent or offers a suppression list.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.STATIC.SWIFT_HOT_PATH
+```
+
+`QC.STATIC.SWIFT_CONCURRENCY_ESCAPE` blocks `@unchecked Sendable`, `nonisolated(unsafe)`,
+`@preconcurrency`, and `@_unsafeInheritExecutor` in shipped Swift sources. These are not
+concurrency migrations or evidence of ownership; the correct remediation is a compiler-verifiable
+actor, value, or ownership boundary.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.STATIC.SWIFT_CONCURRENCY_ESCAPE
+```

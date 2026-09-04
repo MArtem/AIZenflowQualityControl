@@ -56,6 +56,14 @@ and a tracked configuration, reports its tool/configuration digests, and never c
 Configuration/signing is a separate manual baseline comparison: it reports only explicitly listed
 release-sensitive path changes and never claims signing or App Store correctness.
 
+The catalog also includes two app-neutral shipped-source gates: `QC.STATIC.SWIFT_HOT_PATH` blocks
+only high-confidence synchronous file/media operations, and `QC.STATIC.SWIFT_CONCURRENCY_ESCAPE`
+blocks known Swift concurrency escape hatches (`@unchecked Sendable`, `nonisolated(unsafe)`,
+`@preconcurrency`, and `@_unsafeInheritExecutor`). Both scan the clean Git `HEAD`, exclude tests,
+fixtures, comments, and documentation, fail closed on malformed or oversized input, and provide no
+suppression mechanism. They complement compiler diagnostics; they do not claim that a static scan
+proves actor correctness, runtime behavior, or production readiness.
+
 ## Authority Boundary
 
 - `MArtem/AIZenflowDocumentation` owns reusable human policy, intent, routing, and interpretation.

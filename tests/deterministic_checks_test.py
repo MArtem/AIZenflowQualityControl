@@ -681,5 +681,142 @@ class ResourceAssetsAdapterTests(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
 
 
+class SwiftHotPathAdapterTests(unittest.TestCase):
+    def run_check(self, files: dict[str, bytes]) -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for path, contents in files.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(root),
+                    "-c", "user.name=fixture",
+                    "-c", "user.email=fixture@example.invalid",
+                    "commit", "--quiet", "-m", "fixture",
+                ],
+                check=True,
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "--repository-root", str(root),
+                    "--catalog", str(CATALOG),
+                    "--check", "QC.STATIC.SWIFT_HOT_PATH",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_SYSTEM": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                },
+            )
+            return result.returncode, json.loads(result.stdout)
+
+    def test_async_file_handle_path_passes(self) -> None:
+        returncode, report = self.run_check({
+            "Sources/Safe.swift": b"""
+import Foundation
+struct Safe {
+    func load(_ url: URL) async throws -> Data {
+        try await Task.detached {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            return try handle.readToEnd() ?? Data()
+        }.value
+    }
+}
+""",
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_blocking_media_paths_fail(self) -> None:
+        returncode, report = self.run_check({
+            "Sources/Unsafe.swift": b"""
+import Foundation
+import PDFKit
+import UIKit
+let data = Data(contentsOf: URL(fileURLWithPath: "x"))
+let image = UIImage(contentsOfFile: "x")
+let document = PDFDocument(url: URL(fileURLWithPath: "x"))
+""",
+        })
+        self.assertEqual(returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(len(report["checks"][0]["findings"]), 3)
+
+    def test_comment_examples_are_ignored(self) -> None:
+        returncode, report = self.run_check({
+            "Sources/Comments.swift": b"""
+// Data(contentsOf: url) is not executable code.
+/* PDFDocument(url: url) and UIImage(contentsOfFile: path) are examples. */
+struct Safe {}
+""",
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_tests_and_fixtures_are_outside_shipped_scope(self) -> None:
+        returncode, report = self.run_check({
+            "Tests/UnsafeTests.swift": b"let data = Data(contentsOf: URL(fileURLWithPath: \"x\"))\n",
+            "fixtures/UnsafeFixture.swift": b"let data = Data(contentsOf: URL(fileURLWithPath: \"x\"))\n",
+        })
+        self.assertEqual(returncode, 0)
+        self.assertEqual(report["status"], "PASS")
+
+    def test_concurrency_escape_hatches_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "Sources/Unsafe.swift"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(
+                "final class UnsafeState: @unchecked Sendable {\n"
+                "    nonisolated(unsafe) var value = 0\n"
+                "}\n"
+                "@preconcurrency import Foundation\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
+            subprocess.run(
+                [
+                    "git", "-C", str(root),
+                    "-c", "user.name=fixture",
+                    "-c", "user.email=fixture@example.invalid",
+                    "commit", "--quiet", "-m", "fixture",
+                ],
+                check=True,
+            )
+            result = subprocess.run(
+                [
+                    sys.executable, str(ADAPTER),
+                    "--repository-root", str(root),
+                    "--catalog", str(CATALOG),
+                    "--check", "QC.STATIC.SWIFT_CONCURRENCY_ESCAPE",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_SYSTEM": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                },
+            )
+            report = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(len(report["checks"][0]["findings"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

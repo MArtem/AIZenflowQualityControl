@@ -73,6 +73,9 @@ MAX_CONFIGURATION_PATHS = 256
 MAX_CONFIGURATION_DIFF_BYTES = 256 * 1024
 MAX_TEST_FILES = 4_096
 MAX_TEST_TOTAL_BYTES = 16 * 1024 * 1024
+MAX_SWIFT_HOT_PATH_FILES = 4_096
+MAX_SWIFT_HOT_PATH_FILE_BYTES = 2 * 1024 * 1024
+MAX_SWIFT_HOT_PATH_TOTAL_BYTES = 32 * 1024 * 1024
 ASSET_SET_SUFFIXES = (
     ".appiconset", ".colorset", ".dataset", ".imageset", ".imagestack", ".launchimage",
     ".stickerpack", ".symbolset", ".arreferenceimage", ".reality", ".texture", ".spriteatlas",
@@ -107,6 +110,21 @@ TODO_METADATA = re.compile(
 DISABLED_TEST_PATTERNS = (
     ("Swift Testing disabled attribute", re.compile(r"@(?:Test|Suite)\s*\([^)]{0,4096}\.disabled\b", re.DOTALL)),
     ("unconditional XCTest skip", re.compile(r"\bXCTSkip\s*\(")),
+)
+SWIFT_HOT_PATH_EXCLUDED_COMPONENTS = {
+    ".build", ".git", ".quality-control", "deriveddata", "docs", "fixture", "fixtures", "tests", "uitests",
+}
+SWIFT_HOT_PATH_PATTERNS = (
+    ("synchronous file/data read", re.compile(r"\bData\s*\(\s*contentsOf\s*:")),
+    ("synchronous image file decode", re.compile(r"\bUIImage\s*\(\s*contentsOfFile\s*:")),
+    ("synchronous PDF URL load", re.compile(r"\bPDFDocument\s*\(\s*url\s*:")),
+    ("blocking CGImage extraction", re.compile(r"\.copyCGImage\s*\(")),
+)
+SWIFT_CONCURRENCY_ESCAPE_PATTERNS = (
+    ("unchecked Sendable escape", re.compile(r"@unchecked\s+Sendable\b")),
+    ("unsafe nonisolated escape", re.compile(r"\bnonisolated\s*\(\s*unsafe\s*\)")),
+    ("preconcurrency compatibility escape", re.compile(r"@preconcurrency\b")),
+    ("unsafe executor inheritance escape", re.compile(r"@_unsafeInheritExecutor\b")),
 )
 GENERATED_MARKER = re.compile(
     r"@generated-by[ \t]+generator=(?P<generator>[A-Za-z0-9._/-]{1,128})[ \t]+"
@@ -646,6 +664,124 @@ def findings_for_disabled_tests(root: Path, paths: list[str]) -> list[dict[str, 
                 if len(findings) >= MAX_FINDINGS:
                     return findings
     return findings
+
+
+def swift_hot_path_source_paths(root: Path, paths: list[str]) -> list[str]:
+    selected = sorted(
+        path for path in paths
+        if Path(path).suffix.lower() == ".swift"
+        and not any(part.lower() in SWIFT_HOT_PATH_EXCLUDED_COMPONENTS for part in Path(path).parts)
+    )
+    if len(selected) > MAX_SWIFT_HOT_PATH_FILES:
+        raise AdapterError("tracked shipped Swift sources exceed the immutable hot-path file limit")
+    entries = tracked_tree_entries(root)
+    if any(entries.get(path) not in {"100644", "100755"} for path in selected):
+        raise AdapterError("tracked shipped Swift source must be a regular Git-tree file")
+    return selected
+
+
+def mask_swift_comments(text: str) -> str:
+    """Mask comments while preserving line positions for deterministic source diagnostics."""
+    characters = list(text)
+    index = 0
+    state = "code"
+    block_depth = 0
+    while index < len(characters):
+        if state == "line":
+            if characters[index] == "\n":
+                state = "code"
+            else:
+                characters[index] = " "
+            index += 1
+            continue
+        if state == "block":
+            if text.startswith("/*", index):
+                block_depth += 1
+                characters[index:index + 2] = [" ", " "]
+                index += 2
+                continue
+            if text.startswith("*/", index):
+                block_depth -= 1
+                characters[index:index + 2] = [" ", " "]
+                index += 2
+                if block_depth == 0:
+                    state = "code"
+                continue
+            if characters[index] != "\n":
+                characters[index] = " "
+            index += 1
+            continue
+        if state == "string":
+            if characters[index] == "\\":
+                index += 2
+                continue
+            if characters[index] == '"':
+                state = "code"
+            index += 1
+            continue
+        if text.startswith("//", index):
+            characters[index:index + 2] = [" ", " "]
+            state = "line"
+            index += 2
+            continue
+        if text.startswith("/*", index):
+            characters[index:index + 2] = [" ", " "]
+            state = "block"
+            block_depth = 1
+            index += 2
+            continue
+        if characters[index] == '"':
+            state = "string"
+        index += 1
+    return "".join(characters)
+
+
+def findings_for_swift_source_patterns(
+    root: Path,
+    paths: list[str],
+    patterns: tuple[tuple[str, re.Pattern[str]], ...],
+    message_suffix: str,
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    total_bytes = 0
+    for path in swift_hot_path_source_paths(root, paths):
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_SWIFT_HOT_PATH_FILE_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_SWIFT_HOT_PATH_TOTAL_BYTES:
+            raise AdapterError("tracked shipped Swift sources exceed the immutable source-pattern byte limit")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"shipped Swift source must be UTF-8 text: {path}") from error
+        masked = mask_swift_comments(text)
+        for name, pattern in patterns:
+            for match in pattern.finditer(masked):
+                line = masked[:match.start()].count("\n") + 1
+                findings.append({
+                    "path": path,
+                    "message": f"{name} is forbidden in shipped Swift source at line {line}; {message_suffix}",
+                })
+                if len(findings) >= MAX_FINDINGS:
+                    return findings
+    return findings
+
+
+def findings_for_swift_hot_paths(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    return findings_for_swift_source_patterns(
+        root,
+        paths,
+        SWIFT_HOT_PATH_PATTERNS,
+        "move work behind an explicit asynchronous ownership boundary.",
+    )
+
+
+def findings_for_swift_concurrency_escapes(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    return findings_for_swift_source_patterns(
+        root,
+        paths,
+        SWIFT_CONCURRENCY_ESCAPE_PATTERNS,
+        "establish a compiler-verifiable actor, value, or ownership boundary instead.",
+    )
 
 
 def normalized_dependency_identity(value: str) -> str:
@@ -1754,6 +1890,46 @@ def main() -> int:
                 revision,
                 "PASS",
                 "No explicitly disabled or unconditionally skipped tests were found in the requested scope; target membership and conditional skips remain outside this claim.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.STATIC.SWIFT_HOT_PATH":
+            findings = findings_for_swift_hot_paths(root, paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Forbidden synchronous or blocking Swift hot-path operations were found in shipped source.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "No configured synchronous or blocking Swift hot-path operations were found in shipped source; comments, tests, fixtures, and documentation are outside this check.",
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.STATIC.SWIFT_CONCURRENCY_ESCAPE":
+            findings = findings_for_swift_concurrency_escapes(root, paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Forbidden Swift concurrency escape hatches were found in shipped source.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "No forbidden Swift concurrency escape hatches were found in shipped source; comments, tests, fixtures, and documentation are outside this check.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0

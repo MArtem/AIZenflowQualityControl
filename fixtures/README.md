@@ -54,3 +54,9 @@ profiles, provisioning, or App Store configuration is valid.
 `QC.TESTS.DISABLED`. The positive fixture has no unconditional skip marker; the negative fixture
 contains `XCTSkip(...)` and must return `FAIL`. The adapter does not infer Xcode target membership,
 unbound test files, or conditional `XCTSkipIf/Unless` behavior.
+
+`swift-hot-path/passing-project/` demonstrates cancellable off-main file access and
+`swift-hot-path/failing-project/` demonstrates blocking file, image, and PDF APIs. The adapter
+must pass only the former. `swift-concurrency-escape/passing-project/` uses actor-owned state;
+`swift-concurrency-escape/failing-project/` contains forbidden escape-hatch attributes. These
+fixtures are source-pattern contracts, not build or runtime evidence.
