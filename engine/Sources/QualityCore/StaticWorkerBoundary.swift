@@ -26,44 +26,54 @@ package struct BoundedProcessResult: Sendable {
     }
 }
 
-private final class BoundedOutputAccumulator: @unchecked Sendable {
-    private let lock = NSLock()
-    private let maximumBytes: Int
-    private var storage = Data()
-    private var exceededLimit = false
-    private var readFailed = false
+private final class BoundedOutputAccumulator: Sendable {
+    private struct State: Sendable {
+        let maximumBytes: Int
+        var storage = Data()
+        var exceededLimit = false
+        var readFailed = false
+    }
+
+    private let queue: DispatchQueue
+    private let stateKey: DispatchSpecificKey<State>
 
     init(maximumBytes: Int) {
-        self.maximumBytes = maximumBytes
+        queue = DispatchQueue(label: "com.aizenflow.quality-control.output-accumulator")
+        stateKey = DispatchSpecificKey<State>()
+        queue.setSpecific(key: stateKey, value: State(maximumBytes: maximumBytes))
     }
 
     func append(_ data: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-
-        let remainingCapacity = maximumBytes - storage.count
-        if data.count > remainingCapacity {
-            exceededLimit = true
-        }
-        if remainingCapacity > 0 {
-            storage.append(data.prefix(remainingCapacity))
+        queue.sync {
+            var state = DispatchQueue.getSpecific(key: stateKey)!
+            let remainingCapacity = state.maximumBytes - state.storage.count
+            if data.count > remainingCapacity {
+                state.exceededLimit = true
+            }
+            if remainingCapacity > 0 {
+                state.storage.append(data.prefix(remainingCapacity))
+            }
+            queue.setSpecific(key: stateKey, value: state)
         }
     }
 
     func markReadFailure() {
-        lock.lock()
-        defer { lock.unlock() }
-        readFailed = true
+        queue.sync {
+            var state = DispatchQueue.getSpecific(key: stateKey)!
+            state.readFailed = true
+            queue.setSpecific(key: stateKey, value: state)
+        }
     }
 
     func snapshot() -> (data: Data, exceededLimit: Bool, readFailed: Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (storage, exceededLimit, readFailed)
+        queue.sync {
+            let state = DispatchQueue.getSpecific(key: stateKey)!
+            return (state.storage, state.exceededLimit, state.readFailed)
+        }
     }
 }
 
-package final class ProcessExitMonitor: @unchecked Sendable {
+package final class ProcessExitMonitor: Sendable {
     private let source: any DispatchSourceProcess
 
     package init(
