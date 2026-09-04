@@ -139,12 +139,12 @@
     },
     {
       "id": "QC.TESTS.DISABLED",
-      "scope": "Disabled, skipped, or unbound tests in an applicable test target",
+      "scope": "Explicitly disabled or unconditionally skipped tests in an explicitly declared test-source scope",
       "severity": "block",
       "applicability": "profile",
       "remediation": "Restore the test or record an explicit applicability decision and owner.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/tests/passing-project/", "negative": "fixtures/tests/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.TODO.OWNER",

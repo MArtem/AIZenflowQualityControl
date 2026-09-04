@@ -138,3 +138,17 @@ python3 adapters/deterministic_checks.py \
   --baseline-revision <40-hex-ancestor> \
   --configuration-signing-policy .quality-control/configuration-signing.json
 ```
+
+`QC.TESTS.DISABLED` scans only explicit repository-relative `--test-path` scopes from a clean Git
+`HEAD`. It reports Swift Testing `.disabled` attributes and unconditional `XCTSkip(...)` calls as
+`FAIL`; malformed paths, missing scopes, unreadable/non-UTF-8 sources, and immutable-limit
+violations are `BLOCKED`. It does not infer Xcode target membership or classify conditional
+`XCTSkipIf/Unless` behavior.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.TESTS.DISABLED \
+  --test-path Tests
+```

@@ -49,3 +49,8 @@ then mutates a listed path only for the failing case; the positive case keeps bo
 `configuration-signing/boundary-project/` contains a traversal path and must return `BLOCKED`. These
 fixtures detect release-sensitive changes only; they do not claim that signing, entitlements,
 profiles, provisioning, or App Store configuration is valid.
+
+`tests/passing-project/` and `tests/failing-project/` are explicit test-source scopes for
+`QC.TESTS.DISABLED`. The positive fixture has no unconditional skip marker; the negative fixture
+contains `XCTSkip(...)` and must return `FAIL`. The adapter does not infer Xcode target membership,
+unbound test files, or conditional `XCTSkipIf/Unless` behavior.

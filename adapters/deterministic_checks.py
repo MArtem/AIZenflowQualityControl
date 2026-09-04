@@ -71,6 +71,8 @@ MAX_FORMAT_COMMAND_TIMEOUT_SECONDS = 5
 MAX_CONFIGURATION_POLICY_BYTES = 256 * 1024
 MAX_CONFIGURATION_PATHS = 256
 MAX_CONFIGURATION_DIFF_BYTES = 256 * 1024
+MAX_TEST_FILES = 4_096
+MAX_TEST_TOTAL_BYTES = 16 * 1024 * 1024
 ASSET_SET_SUFFIXES = (
     ".appiconset", ".colorset", ".dataset", ".imageset", ".imagestack", ".launchimage",
     ".stickerpack", ".symbolset", ".arreferenceimage", ".reality", ".texture", ".spriteatlas",
@@ -101,6 +103,10 @@ TODO_MARKER = re.compile(r"(?:^|//|#|/\*|\*)\s*\b(?:TODO|FIXME)\b")
 TODO_METADATA = re.compile(
     r"\b(?:TODO|FIXME)\b\s*\(\s*owner\s*[=:]\s*[A-Za-z0-9._-]+\s+"
     r"(?:ticket|issue)\s*[=:]\s*[A-Za-z0-9._-]+\s+expires\s*[=:]\s*\d{4}-\d{2}-\d{2}\s*\)"
+)
+DISABLED_TEST_PATTERNS = (
+    ("Swift Testing disabled attribute", re.compile(r"@(?:Test|Suite)\s*\([^)]{0,4096}\.disabled\b", re.DOTALL)),
+    ("unconditional XCTest skip", re.compile(r"\bXCTSkip\s*\(")),
 )
 GENERATED_MARKER = re.compile(
     r"@generated-by[ \t]+generator=(?P<generator>[A-Za-z0-9._/-]{1,128})[ \t]+"
@@ -582,6 +588,63 @@ def findings_for_todo_owner(root: Path) -> list[dict[str, str]]:
                 "path": parts[1][:MAX_STRING_LENGTH],
                 "message": "TODO/FIXME must include owner, ticket/issue, and YYYY-MM-DD expiry metadata.",
             })
+    return findings
+
+
+def test_source_paths(
+    paths: list[str],
+    regular_entries: dict[str, str],
+    requested: list[str],
+) -> list[str]:
+    if not requested:
+        raise AdapterError("QC.TESTS.DISABLED requires at least one explicit --test-path")
+    selected: set[str] = set()
+    tracked = set(paths)
+    for raw_path in requested:
+        if (
+            not raw_path
+            or len(raw_path) > MAX_STRING_LENGTH
+            or raw_path.startswith(("/", "~"))
+            or "\\" in raw_path
+            or any(part in {"", ".", ".."} for part in raw_path.split("/"))
+        ):
+            raise AdapterError(f"test path is not a safe repository-relative path: {raw_path}")
+        prefix = raw_path.rstrip("/") + "/"
+        matches = {path for path in tracked if path == raw_path or path.startswith(prefix)}
+        if not matches:
+            raise AdapterError(f"test path is absent from the authenticated Git HEAD: {raw_path}")
+        swift_matches = {path for path in matches if path.lower().endswith(".swift")}
+        if any(regular_entries.get(path) not in {"100644", "100755"} for path in swift_matches):
+            raise AdapterError(f"test path contains a non-regular Swift Git object: {raw_path}")
+        selected.update(swift_matches)
+    if not selected:
+        raise AdapterError("explicit test paths contain no tracked Swift files")
+    if len(selected) > MAX_TEST_FILES:
+        raise AdapterError("test sources exceed the immutable file limit")
+    return sorted(selected)
+
+
+def findings_for_disabled_tests(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    total_bytes = 0
+    for path in paths:
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_FORMAT_FILE_BYTES)
+        total_bytes += len(data)
+        if total_bytes > MAX_TEST_TOTAL_BYTES:
+            raise AdapterError("test sources exceed the immutable aggregate byte limit")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"test source must be UTF-8 text: {path}") from error
+        for name, pattern in DISABLED_TEST_PATTERNS:
+            for match in pattern.finditer(text):
+                line = text[:match.start()].count("\n") + 1
+                findings.append({
+                    "path": path,
+                    "message": f"{name} disables or skips an applicable test at line {line}.",
+                })
+                if len(findings) >= MAX_FINDINGS:
+                    return findings
     return findings
 
 
@@ -1645,6 +1708,7 @@ def main() -> int:
     parser.add_argument("--configuration-path")
     parser.add_argument("--baseline-revision")
     parser.add_argument("--configuration-signing-policy")
+    parser.add_argument("--test-path", action="append", default=[])
     arguments = parser.parse_args()
     root = Path(arguments.repository_root).resolve()
     try:
@@ -1670,6 +1734,27 @@ def main() -> int:
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
                 return 1
             result = report(arguments.check, revision, "PASS", "All tracked TODO/FIXME markers carry bounded ownership metadata.")
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.TESTS.DISABLED":
+            test_paths = test_source_paths(paths, tracked_tree_entries(root), arguments.test_path)
+            findings = findings_for_disabled_tests(root, test_paths)
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Explicitly disabled or unconditionally skipped test code was found in the requested test scope.",
+                    findings,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "No explicitly disabled or unconditionally skipped tests were found in the requested scope; target membership and conditional skips remain outside this claim.",
+            )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         if arguments.check == "QC.GENERATED.OWNERSHIP":
