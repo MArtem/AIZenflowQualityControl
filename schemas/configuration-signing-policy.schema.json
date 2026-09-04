@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aizenflow.dev/schemas/configuration-signing-policy.schema.json",
+  "title": "Configuration and signing change-detection policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "releaseSensitivePaths"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "releaseSensitivePaths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^(?!/|~)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[?*\\[\\]]).+"
+      }
+    }
+  }
+}

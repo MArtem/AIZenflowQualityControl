@@ -48,11 +48,13 @@ without evidence; missing authority, unstable inputs, unsupported Git index stat
 failure, or verification failure emits evidence-free `BLOCKED`. This boundary does not run tests,
 UI/device checks, review, archive, signing, upload, or release operations.
 
-The catalog-backed deterministic adapters now include `QC.FORMAT.SWIFTFORMAT` in addition to the
-tracked-secret, TODO ownership, generated ownership, dependency lock, localization, and resource
-checks. SwiftFormat remains a separate manual adapter invocation: it requires an explicitly pinned
-executable/version and a tracked configuration, reports its tool/configuration digests, and never
-changes source files.
+The catalog-backed deterministic adapters now include `QC.FORMAT.SWIFTFORMAT`,
+`QC.PRIVACY.MANIFEST`, and `QC.CONFIGURATION.SIGNING` in addition to the tracked-secret, TODO
+ownership, generated ownership, dependency lock, localization, and resource checks. SwiftFormat
+remains a separate manual adapter invocation: it requires an explicitly pinned executable/version
+and a tracked configuration, reports its tool/configuration digests, and never changes source files.
+Configuration/signing is a separate manual baseline comparison: it reports only explicitly listed
+release-sensitive path changes and never claims signing or App Store correctness.
 
 ## Authority Boundary
 

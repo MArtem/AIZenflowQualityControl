@@ -134,8 +134,8 @@
       "severity": "block",
       "applicability": "profile",
       "remediation": "Review configuration and signing changes against the authorized release profile.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "fixture": { "positive": "fixtures/configuration-signing/passing-project/", "negative": "fixtures/configuration-signing/failing-project/" },
+      "implementation": "implemented"
     },
     {
       "id": "QC.TESTS.DISABLED",

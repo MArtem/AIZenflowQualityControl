@@ -63,7 +63,8 @@ boundaries must produce separately authenticated evidence.
 `deterministic-check-result.schema.json` defines catalog-backed adapter results. It binds the check
 report to a lowercase Git `HEAD` revision and permits the bounded `QC.SECRETS.TRACKED`,
 `QC.TODO.OWNER`, `QC.GENERATED.OWNERSHIP`, `QC.DEPENDENCY.LOCK_DRIFT`,
-`QC.LOCALIZATION.CATALOG`, and `QC.RESOURCES.ASSETS` finding shapes. Adapter unavailability is
+`QC.LOCALIZATION.CATALOG`, `QC.RESOURCES.ASSETS`, `QC.FORMAT.SWIFTFORMAT`, and
+`QC.CONFIGURATION.SIGNING` finding shapes. Adapter unavailability is
 represented as `BLOCKED`, not a successful empty scan.
 
 `generated-files-manifest.schema.json` defines the transport shape for the tracked generated-file
@@ -90,6 +91,15 @@ The same schema permits `QC.FORMAT.SWIFTFORMAT`. Its optional `tool` object reco
 name, caller-verified version, and SHA-256 digest; its optional `configuration` object records the
 tracked configuration path and digest. The adapter scans only clean Git-HEAD Swift bytes through
 stdin and never writes or formats in place.
+
+The same schema permits `QC.CONFIGURATION.SIGNING`. Its `comparison` object binds the result to the
+trusted ancestor revision and tracked policy digest. This gate is only a deterministic
+release-sensitive path change detector; it does not prove signing, entitlements, provisioning,
+target membership, or App Store correctness.
+
+`configuration-signing-policy.schema.json` defines the tracked policy envelope. The runtime also
+requires byte-identical policy content in the trusted ancestor and `HEAD`, exact sorted paths, and
+regular Git-tree objects before it can emit a comparison result.
 
 `mode-execution-result.schema.json` defines the bounded envelope emitted by `quality mode-execute`.
 It preserves each child boundary report, evidence, and verification result in execution order.

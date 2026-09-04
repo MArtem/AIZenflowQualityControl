@@ -42,3 +42,10 @@ cases are covered by focused adapter tests.
 Swift source. `format/failing-project/` uses the same configuration with spacing and indentation
 violations; a caller-pinned `swift-format` invocation must return `FAIL` without modifying either
 fixture.
+
+`configuration-signing/passing-project/` and `configuration-signing/failing-project/` contain an
+explicit tracked release-sensitive path policy. The adapter harness creates a trusted baseline and
+then mutates a listed path only for the failing case; the positive case keeps both trees unchanged.
+`configuration-signing/boundary-project/` contains a traversal path and must return `BLOCKED`. These
+fixtures detect release-sensitive changes only; they do not claim that signing, entitlements,
+profiles, provisioning, or App Store configuration is valid.

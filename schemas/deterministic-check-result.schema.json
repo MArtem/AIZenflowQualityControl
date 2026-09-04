@@ -34,13 +34,28 @@
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baselineRevision", "policyPath", "policySHA256"],
+      "properties": {
+        "baselineRevision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "policyPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^(?!/|~)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+        },
+        "policySHA256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
     "checks": {
       "type": "array", "minItems": 1, "maxItems": 1,
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["id", "status", "message"],
         "properties": {
-          "id": {"enum": ["QC.SECRETS.TRACKED", "QC.TODO.OWNER", "QC.GENERATED.OWNERSHIP", "QC.DEPENDENCY.LOCK_DRIFT", "QC.LOCALIZATION.CATALOG", "QC.RESOURCES.ASSETS", "QC.FORMAT.SWIFTFORMAT"]},
+          "id": {"enum": ["QC.SECRETS.TRACKED", "QC.TODO.OWNER", "QC.GENERATED.OWNERSHIP", "QC.DEPENDENCY.LOCK_DRIFT", "QC.LOCALIZATION.CATALOG", "QC.RESOURCES.ASSETS", "QC.FORMAT.SWIFTFORMAT", "QC.CONFIGURATION.SIGNING"]},
           "status": {"enum": ["PASS", "FAIL", "BLOCKED"]},
           "message": {"type": "string", "minLength": 1, "maxLength": 1024},
           "findings": {

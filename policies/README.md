@@ -48,3 +48,8 @@ regular `swift-format` executable and exact expected version, plus a tracked JSO
 It lints only regular Swift files from a clean Git `HEAD` through stdin and records tool/configuration
 digests. Formatter diagnostics are `FAIL`; missing, malformed, mismatched, unavailable, or
 resource-limited inputs are `BLOCKED`. It never performs in-place formatting.
+
+`QC.CONFIGURATION.SIGNING` is an executable, repository-neutral change detector. A tracked policy
+lists exact release-sensitive paths and is required to be byte-identical in the trusted ancestor
+and `HEAD`. The adapter reports changed paths as `FAIL`, malformed or untrusted inputs as `BLOCKED`,
+and no changes as `PASS`; it never infers signing correctness or release authorization.

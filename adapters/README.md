@@ -121,3 +121,20 @@ python3 adapters/deterministic_checks.py \
   --catalog policies/check-catalog.json \
   --check QC.PRIVACY.MANIFEST
 ```
+
+`QC.CONFIGURATION.SIGNING` compares an exact clean Git `HEAD` with a caller-supplied trusted
+ancestor. A tracked JSON policy must explicitly list exact release-sensitive paths; wildcards,
+traversal, missing paths, policy drift, dirty checkouts, and an invalid/non-ancestor baseline are
+`BLOCKED`. A changed listed path is `FAIL` and requires review against the authorized release
+profile; no changed path is `PASS` only for that narrow change-detection claim. The adapter does not
+validate signing identities, provisioning, entitlements semantics, target membership, or App Store
+acceptance, and it never mutates the checkout.
+
+```sh
+python3 adapters/deterministic_checks.py \
+  --repository-root <repository> \
+  --catalog policies/check-catalog.json \
+  --check QC.CONFIGURATION.SIGNING \
+  --baseline-revision <40-hex-ancestor> \
+  --configuration-signing-policy .quality-control/configuration-signing.json
+```

@@ -68,6 +68,9 @@ MAX_FORMAT_TOOL_BYTES = 256 * 1024 * 1024
 MAX_FORMAT_TOOL_VERSION_BYTES = 4 * 1024
 MAX_FORMAT_TOTAL_SECONDS = 120
 MAX_FORMAT_COMMAND_TIMEOUT_SECONDS = 5
+MAX_CONFIGURATION_POLICY_BYTES = 256 * 1024
+MAX_CONFIGURATION_PATHS = 256
+MAX_CONFIGURATION_DIFF_BYTES = 256 * 1024
 ASSET_SET_SUFFIXES = (
     ".appiconset", ".colorset", ".dataset", ".imageset", ".imagestack", ".launchimage",
     ".stickerpack", ".symbolset", ".arreferenceimage", ".reality", ".texture", ".spriteatlas",
@@ -204,9 +207,11 @@ def tracked_paths(root: Path) -> list[str]:
     return sorted(paths)
 
 
-def tracked_tree_entries(root: Path) -> dict[str, str]:
+def tracked_tree_entries(root: Path, revision: str = "HEAD") -> dict[str, str]:
     """Return regular Git-tree paths and modes without consulting the mutable index."""
-    output = bounded_process(root, ["ls-tree", "-r", "-z", "HEAD", "--"], MAX_GIT_OUTPUT_BYTES)
+    if not GIT_REVISION.fullmatch(revision) and revision != "HEAD":
+        raise AdapterError("Git tree revision is malformed")
+    output = bounded_process(root, ["ls-tree", "-r", "-z", revision, "--"], MAX_GIT_OUTPUT_BYTES)
     entries: dict[str, str] = {}
     for record in output.split(b"\0"):
         if not record:
@@ -332,6 +337,138 @@ def format_configuration(root: Path, paths: list[str], path_value: str) -> tuple
     if not isinstance(value, dict):
         raise AdapterError("format configuration root must be a JSON object")
     return text, {"path": path_value, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def configuration_signing_policy(
+    root: Path,
+    paths: list[str],
+    path_value: str,
+    baseline_revision: str,
+) -> tuple[list[str], dict[str, str]]:
+    if not path_value or path_value.startswith(("/", "~")) or "\\" in path_value:
+        raise AdapterError("configuration-signing policy path must be a tracked relative path")
+    if any(part in ("", ".", "..") for part in path_value.split("/")):
+        raise AdapterError("configuration-signing policy path contains traversal or empty segments")
+    current_entries = tracked_tree_entries(root)
+    if path_value not in paths or current_entries.get(path_value) not in {"100644", "100755"}:
+        raise AdapterError("configuration-signing policy must be a regular Git-tree file")
+    baseline_entries = tracked_tree_entries(root, baseline_revision)
+    if baseline_entries.get(path_value) not in {"100644", "100755"}:
+        raise AdapterError("configuration-signing policy must exist in the trusted baseline")
+
+    try:
+        data = bounded_process(
+            root,
+            ["show", f"HEAD:{path_value}"],
+            MAX_CONFIGURATION_POLICY_BYTES,
+        )
+        baseline_data = bounded_process(
+            root,
+            ["show", f"{baseline_revision}:{path_value}"],
+            MAX_CONFIGURATION_POLICY_BYTES,
+        )
+    except AdapterError as error:
+        raise AdapterError("configuration-signing policy is unreadable from Git HEAD/baseline") from error
+    if data != baseline_data:
+        raise AdapterError(
+            "configuration-signing policy changed between the trusted baseline and HEAD; refresh the baseline"
+        )
+    try:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, AdapterError) as error:
+        raise AdapterError("configuration-signing policy must be valid UTF-8 JSON") from error
+    if not isinstance(value, dict) or set(value) != {"schemaVersion", "releaseSensitivePaths"}:
+        raise AdapterError("configuration-signing policy has an unsupported property set")
+    if type(value.get("schemaVersion")) is not int or value["schemaVersion"] != 1:
+        raise AdapterError("configuration-signing policy must use schemaVersion 1")
+    sensitive_paths = value.get("releaseSensitivePaths")
+    if not isinstance(sensitive_paths, list) or not sensitive_paths:
+        raise AdapterError("configuration-signing policy must declare release-sensitive paths")
+    if len(sensitive_paths) > MAX_CONFIGURATION_PATHS:
+        raise AdapterError("configuration-signing policy exceeds the immutable path limit")
+    validated: list[str] = []
+    seen: set[str] = set()
+    for index, sensitive_path in enumerate(sensitive_paths):
+        if (
+            not isinstance(sensitive_path, str)
+            or not sensitive_path
+            or len(sensitive_path) > MAX_STRING_LENGTH
+            or sensitive_path.startswith(("/", "~"))
+            or "\\" in sensitive_path
+            or any(part in ("", ".", "..") for part in sensitive_path.split("/"))
+            or any(character in sensitive_path for character in "*?[]")
+        ):
+            raise AdapterError(f"configuration-signing path {index} is not an exact safe relative path")
+        if sensitive_path in seen:
+            raise AdapterError(f"configuration-signing path {index} is duplicated")
+        if sensitive_path == path_value:
+            raise AdapterError("configuration-signing policy must not list itself as release-sensitive")
+        current_mode = current_entries.get(sensitive_path)
+        baseline_mode = baseline_entries.get(sensitive_path)
+        if current_mode not in {None, "100644", "100755"}:
+            raise AdapterError(f"configuration-signing path is a non-regular current Git object: {sensitive_path}")
+        if baseline_mode not in {None, "100644", "100755"}:
+            raise AdapterError(f"configuration-signing path is a non-regular baseline Git object: {sensitive_path}")
+        if current_mode is None and baseline_mode is None:
+            raise AdapterError(f"configuration-signing path is absent from both trees: {sensitive_path}")
+        seen.add(sensitive_path)
+        validated.append(sensitive_path)
+    if validated != sorted(validated):
+        raise AdapterError("configuration-signing paths must be sorted bytewise")
+    return validated, {
+        "policyPath": path_value,
+        "policySHA256": hashlib.sha256(data).hexdigest(),
+        "baselineRevision": baseline_revision,
+    }
+
+
+def configuration_signing_baseline(root: Path, baseline_revision: str) -> str:
+    if not GIT_REVISION.fullmatch(baseline_revision):
+        raise AdapterError("configuration-signing baseline must be a lowercase 40-character commit SHA")
+    try:
+        merge_base = git_text(root, ["merge-base", baseline_revision, "HEAD"], 128).strip()
+    except AdapterError as error:
+        raise AdapterError("configuration-signing baseline is not a reachable commit") from error
+    if merge_base != baseline_revision:
+        raise AdapterError("configuration-signing baseline must be an ancestor of HEAD")
+    return baseline_revision
+
+
+def findings_for_configuration_signing(
+    root: Path,
+    policy_path: str,
+    baseline_revision: str,
+    paths: list[str],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    baseline = configuration_signing_baseline(root, baseline_revision)
+    sensitive_paths, policy_info = configuration_signing_policy(
+        root,
+        paths,
+        policy_path,
+        baseline,
+    )
+    changed_paths = bounded_process(
+        root,
+        [
+            "diff", "--name-only", "-z", "--diff-filter=ACDMRTUXB",
+            baseline, "HEAD", "--", *sorted(set(sensitive_paths + [policy_path])),
+        ],
+        MAX_CONFIGURATION_DIFF_BYTES,
+    )
+    try:
+        changed = [value.decode("utf-8") for value in changed_paths.split(b"\0") if value]
+    except UnicodeDecodeError as error:
+        raise AdapterError("configuration-signing diff contains non-UTF-8 paths") from error
+    if len(changed) > MAX_CONFIGURATION_PATHS:
+        raise AdapterError("configuration-signing diff exceeds the immutable path limit")
+    findings = [
+        {
+            "path": path,
+            "message": "Release-sensitive path changed from the trusted baseline; review it against the authorized release profile.",
+        }
+        for path in changed
+    ]
+    return findings, policy_info
 
 
 def format_source_paths(root: Path, paths: list[str]) -> list[str]:
@@ -1477,6 +1614,7 @@ def report(
     findings: list[dict[str, str]] | None = None,
     tool: dict[str, str] | None = None,
     configuration: dict[str, str] | None = None,
+    comparison: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     check: dict[str, Any] = {"id": check_id, "status": status, "message": message}
     if findings:
@@ -1492,6 +1630,8 @@ def report(
         result["tool"] = tool
     if configuration is not None:
         result["configuration"] = configuration
+    if comparison is not None:
+        result["comparison"] = comparison
     return result
 
 
@@ -1503,6 +1643,8 @@ def main() -> int:
     parser.add_argument("--tool-path")
     parser.add_argument("--tool-version")
     parser.add_argument("--configuration-path")
+    parser.add_argument("--baseline-revision")
+    parser.add_argument("--configuration-signing-policy")
     arguments = parser.parse_args()
     root = Path(arguments.repository_root).resolve()
     try:
@@ -1659,6 +1801,37 @@ def main() -> int:
                 "All tracked Swift sources passed the caller-pinned SwiftFormat check.",
                 tool=tool_info,
                 configuration=configuration_info,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.CONFIGURATION.SIGNING":
+            if not arguments.baseline_revision or not arguments.configuration_signing_policy:
+                raise AdapterError(
+                    "QC.CONFIGURATION.SIGNING requires --baseline-revision and --configuration-signing-policy"
+                )
+            findings, comparison = findings_for_configuration_signing(
+                root,
+                arguments.configuration_signing_policy,
+                arguments.baseline_revision,
+                paths,
+            )
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "Release-sensitive configuration or signing paths changed from the trusted baseline.",
+                    findings,
+                    comparison=comparison,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "No listed release-sensitive configuration or signing paths changed from the trusted baseline.",
+                comparison=comparison,
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
