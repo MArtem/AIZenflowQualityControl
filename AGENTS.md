@@ -1,5 +1,29 @@
 # Quality-Control Repository Instructions
 
+## Global Rules Bootstrap
+<!-- AIZENFLOW_GLOBAL_RULES_BOOTSTRAP_V1 -->
+Before any repository action, read and apply
+`/Users/Artem/.zenflow/worktrees/documentation-vault/reusable/GLOBAL_RULES_BOOTSTRAP.md`.
+It activates the current reusable rules directly from the canonical documentation repository.
+This repository file is a repository-specific overlay only: it may strengthen the global
+baseline, but it must not silently replace or weaken it. If the canonical bootstrap is
+unavailable, stop before changing the repository and report the missing global-rule source; the
+user does not need to remind the agent to load it.
+
+## Shared Documentation Entry
+
+Before changing repository code, policy, workflow, evidence, or documentation, read the compact
+startup/router surface from the canonical distribution baseline:
+
+- `/Users/Artem/.zenflow/worktrees/documentation-vault/reusable/baseline/docs/TASK_TYPE_DOCUMENTATION_ROUTER.md`
+- its Level 0 set;
+- only the selected quality-control/static-gate routes.
+
+Canonical reusable policy lives under
+`/Users/Artem/.zenflow/worktrees/documentation-vault/reusable/`; this repository owns executable
+engine behavior and repository-specific constraints only. Do not copy app overlays, archives, or
+the complete vault into this repository.
+
 ## Authority
 
 The reusable human policy is owned by `MArtem/AIZenflowDocumentation`, including its
