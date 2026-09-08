@@ -63,6 +63,11 @@ and a tracked configuration, reports its tool/configuration digests, and never c
 Configuration/signing is a separate manual baseline comparison: it reports only explicitly listed
 release-sensitive path changes and never claims signing or App Store correctness.
 
+The catalog records `implemented`, `verified`, `wired`, and `pilotEnabled` separately for every
+check. A direct adapter invocation proves only that adapter's bounded result; it does not prove that
+the trusted mode dispatcher invokes the check. Pilot enablement stays false until the later canary
+and consumer-pilot gates are explicitly completed.
+
 The catalog also includes two app-neutral shipped-source gates: `QC.STATIC.SWIFT_HOT_PATH` applies
 an explicit lexical policy ban to configured synchronous file/media operations, and `QC.STATIC.SWIFT_CONCURRENCY_ESCAPE`
 blocks known Swift concurrency escape hatches (`@unchecked Sendable`, `nonisolated(unsafe)`,

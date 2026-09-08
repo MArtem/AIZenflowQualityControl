@@ -12,6 +12,14 @@ applicability, remediation, and positive/negative fixture references. `implement
 claims that a staged check already runs. Placeholder fixture references for staged checks are
 catalog commitments, not existing evidence, until their adapters and fixtures are added.
 
+Catalog maturity is deliberately four-dimensional and is not collapsed into `implementation`:
+`maturity.implemented` means an adapter or engine path exists; `verified` means the listed fixture or
+bounded acceptance evidence was actually exercised; `wired` means the trusted QualityControl mode
+dispatcher invokes that check (a direct adapter command is not mode coverage); and `pilotEnabled`
+means the check has passed the later consumer-pilot promotion gate. A verified check must list exact
+repository-relative evidence paths. Until the canary and two consumer pilots are explicitly opened,
+`pilotEnabled` remains false, even for an implemented and verified adapter.
+
 `QC.SECRETS.TRACKED` is the first executable catalog adapter. It is intentionally conservative and
 check-only: it scans a clean exact Git `HEAD` for high-confidence credential markers and
 credential-shaped provisioning/key containers. The remaining staged entries still require their

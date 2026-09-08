@@ -67,6 +67,11 @@ report to a lowercase Git `HEAD` revision and permits the bounded `QC.SECRETS.TR
 `QC.CONFIGURATION.SIGNING` finding shapes. Adapter unavailability is
 represented as `BLOCKED`, not a successful empty scan.
 
+The catalog transport is versioned separately in `policies/check-catalog.schema.json`. Its required
+`maturity` object keeps implementation, exercised verification, trusted mode wiring, and later
+pilot enablement separate. A catalog entry with `implemented` or fixture references does not by
+itself create mode-level evidence; the mode dispatcher and pilot gates must be verified independently.
+
 `generated-files-manifest.schema.json` defines the transport shape for the tracked generated-file
 ownership manifest. Runtime validation additionally enforces unique normalized paths, regular Git
 tree objects, UTF-8 content, exact SHA-256 bytes, one matching marker, and the immutable aggregate

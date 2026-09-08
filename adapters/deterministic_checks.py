@@ -563,8 +563,28 @@ def catalog_entry(catalog: dict[str, Any], check_id: str) -> None:
     matches = [entry for entry in catalog["checks"] if isinstance(entry, dict) and entry.get("id") == check_id]
     if len(matches) != 1:
         raise AdapterError(f"check is absent or duplicated in catalog: {check_id}")
-    if matches[0].get("implementation") != "implemented":
+    entry = matches[0]
+    if entry.get("implementation") != "implemented":
         raise AdapterError(f"check adapter is not implemented: {check_id}")
+    maturity = entry.get("maturity")
+    if not isinstance(maturity, dict) or set(maturity) != {
+        "implemented", "verified", "wired", "pilotEnabled", "evidence"
+    }:
+        raise AdapterError(f"check maturity is missing or malformed: {check_id}")
+    if any(not isinstance(maturity[key], bool) for key in ("implemented", "verified", "wired", "pilotEnabled")):
+        raise AdapterError(f"check maturity flags are malformed: {check_id}")
+    evidence = maturity["evidence"]
+    if not isinstance(evidence, list) or len(evidence) > 16 or any(
+        not isinstance(value, str) or not value.strip() or len(value) > MAX_STRING_LENGTH
+        for value in evidence
+    ):
+        raise AdapterError(f"check maturity evidence is malformed: {check_id}")
+    if not maturity["implemented"] or (maturity["wired"] and not maturity["implemented"]):
+        raise AdapterError(f"implemented check has inconsistent maturity flags: {check_id}")
+    if maturity["verified"] and not evidence:
+        raise AdapterError(f"verified check has no evidence references: {check_id}")
+    if maturity["pilotEnabled"] and not (maturity["verified"] and maturity["wired"]):
+        raise AdapterError(f"pilot-enabled check is not verified and mode-wired: {check_id}")
 
 
 def findings_for_secrets(root: Path, paths: list[str]) -> list[dict[str, str]]:

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "1.0.0",
+  "catalogVersion": "1.1.0",
   "checks": [
     {
       "id": "QC.PROFILE.CONTRACT",
@@ -9,7 +9,8 @@
       "applicability": "always",
       "remediation": "Fix the profile contract before running any quality mode.",
       "fixture": { "positive": "fixtures/profiles/valid-minimal.json", "negative": "fixtures/profiles/invalid-path-traversal.json" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": true, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.STATIC.SOURCE_BOUNDARY",
@@ -18,7 +19,8 @@
       "applicability": "always",
       "remediation": "Keep every scanned source inside the authenticated declared source scope.",
       "fixture": { "positive": "fixtures/profiles/valid-minimal.json", "negative": "fixtures/profiles/invalid-path-traversal.json" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": true, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.STATIC.FORBIDDEN_ARTIFACT",
@@ -27,7 +29,8 @@
       "applicability": "always",
       "remediation": "Remove generated build artifacts from the source checkout.",
       "fixture": { "positive": "fixtures/policies/deliberate-failure-static-policy.json", "negative": "fixtures/policies/deliberate-failure-static-policy.json" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": true, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.BUILD.MEMBERSHIP",
@@ -36,7 +39,8 @@
       "applicability": "profile",
       "remediation": "Provide stable build-log evidence for the declared target/configuration; unresolved, empty, outside-scope, or path-unsafe membership remains BLOCKED.",
       "fixture": { "positive": "fixtures/build-membership/README.md", "negative": "fixtures/build-membership/README.md" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": true, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.BUILD.FIRST_PARTY_WARNINGS",
@@ -45,7 +49,8 @@
       "applicability": "profile",
       "remediation": "Resolve new first-party warnings or record an approved bounded exception.",
       "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "implementation": "staged",
+      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.CONCURRENCY.DIAGNOSTICS",
@@ -54,7 +59,8 @@
       "applicability": "profile",
       "remediation": "Resolve compiler concurrency diagnostics at the correct actor or Sendable boundary.",
       "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "implementation": "staged",
+      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.DEPENDENCY.LOCK_DRIFT",
@@ -63,7 +69,8 @@
       "applicability": "profile",
       "remediation": "Regenerate and review the declared dependency lock from the approved toolchain.",
       "fixture": { "positive": "fixtures/dependencies/passing-project/", "negative": "fixtures/dependencies/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.FORMAT.SWIFTFORMAT",
@@ -72,7 +79,8 @@
       "applicability": "profile",
       "remediation": "Run the pinned formatter locally and commit the resulting formatting changes.",
       "fixture": { "positive": "fixtures/format/passing-project/", "negative": "fixtures/format/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.LINT.SWIFTLINT",
@@ -81,7 +89,8 @@
       "applicability": "profile",
       "remediation": "Resolve lint errors using the repository-pinned SwiftLint configuration.",
       "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged"
+      "implementation": "staged",
+      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.SECRETS.TRACKED",
@@ -90,7 +99,8 @@
       "applicability": "always",
       "remediation": "Remove secrets, rotate exposed credentials, and use approved secret storage.",
       "fixture": { "positive": "fixtures/secrets/passing-project/", "negative": "fixtures/secrets/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.GENERATED.OWNERSHIP",
@@ -99,7 +109,8 @@
       "applicability": "profile",
       "remediation": "Regenerate owned artifacts from the pinned generator or remove unowned output.",
       "fixture": { "positive": "fixtures/generated/passing-project/", "negative": "fixtures/generated/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.LOCALIZATION.CATALOG",
@@ -108,7 +119,8 @@
       "applicability": "profile",
       "remediation": "Synchronize localization keys and validate every localized resource format.",
       "fixture": { "positive": "fixtures/localization/passing-project/", "negative": "fixtures/localization/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.RESOURCES.ASSETS",
@@ -117,7 +129,8 @@
       "applicability": "profile",
       "remediation": "Fix missing, duplicate, invalid, or unowned resources before merging.",
       "fixture": { "positive": "fixtures/resources/passing-project/", "negative": "fixtures/resources/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.PRIVACY.MANIFEST",
@@ -126,7 +139,8 @@
       "applicability": "profile",
       "remediation": "Fix malformed, unsupported, duplicate, or out-of-bounds privacy manifest structure; review API/data-use alignment separately.",
       "fixture": { "positive": "fixtures/privacy/passing-project/", "negative": "fixtures/privacy/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.CONFIGURATION.SIGNING",
@@ -135,7 +149,8 @@
       "applicability": "profile",
       "remediation": "Review configuration and signing changes against the authorized release profile.",
       "fixture": { "positive": "fixtures/configuration-signing/passing-project/", "negative": "fixtures/configuration-signing/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.TESTS.DISABLED",
@@ -144,7 +159,8 @@
       "applicability": "profile",
       "remediation": "Restore the test or record the conditional/platform applicability decision and owner; runtime selection and execution counts require separate evidence.",
       "fixture": { "positive": "fixtures/tests/passing-project/", "negative": "fixtures/tests/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": true, "wired": false, "pilotEnabled": false, "evidence": ["fixtures/tests/passing-project/", "fixtures/tests/failing-project/", "fixtures/README.md"] }
     },
     {
       "id": "QC.STATIC.SWIFT_HOT_PATH",
@@ -153,7 +169,8 @@
       "applicability": "profile",
       "remediation": "Remove or replace the banned API, or change the approved policy deliberately; this adapter does not infer executor context, runtime performance, or a sufficient asynchronous boundary.",
       "fixture": { "positive": "fixtures/swift-hot-path/passing-project/", "negative": "fixtures/swift-hot-path/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": true, "wired": false, "pilotEnabled": false, "evidence": ["fixtures/swift-hot-path/passing-project/", "fixtures/swift-hot-path/failing-project/", "fixtures/README.md"] }
     },
     {
       "id": "QC.STATIC.SWIFT_CONCURRENCY_ESCAPE",
@@ -162,7 +179,8 @@
       "applicability": "profile",
       "remediation": "Resolve isolation and sendability through a compiler-verifiable actor, value, or ownership boundary; do not use escape-hatch attributes.",
       "fixture": { "positive": "fixtures/swift-concurrency-escape/passing-project/", "negative": "fixtures/swift-concurrency-escape/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": true, "wired": false, "pilotEnabled": false, "evidence": ["fixtures/swift-concurrency-escape/passing-project/", "fixtures/swift-concurrency-escape/failing-project/", "fixtures/README.md"] }
     },
     {
       "id": "QC.TODO.OWNER",
@@ -171,7 +189,8 @@
       "applicability": "profile",
       "remediation": "Link the marker to an owner and ticket with a bounded expiry, or resolve it.",
       "fixture": { "positive": "fixtures/todo/passing-project/", "negative": "fixtures/todo/failing-project/" },
-      "implementation": "implemented"
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.ARCHITECTURE.REVIEW_CANDIDATE",
@@ -180,7 +199,8 @@
       "applicability": "manual",
       "remediation": "Review the signal in context; do not convert it to a blocking rule without a project contract.",
       "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "review-candidate"
+      "implementation": "review-candidate",
+      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     }
   ]
 }

@@ -25,7 +25,7 @@
     "check": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "scope", "severity", "applicability", "remediation", "fixture", "implementation"],
+      "required": ["id", "scope", "severity", "applicability", "remediation", "fixture", "implementation", "maturity"],
       "properties": {
         "id": {
           "type": "string",
@@ -45,7 +45,24 @@
             "negative": { "$ref": "#/$defs/boundedString" }
           }
         },
-        "implementation": { "enum": ["implemented", "staged", "review-candidate"] }
+        "implementation": { "enum": ["implemented", "staged", "review-candidate"] },
+        "maturity": { "$ref": "#/$defs/maturity" }
+      }
+    },
+    "maturity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implemented", "verified", "wired", "pilotEnabled", "evidence"],
+      "properties": {
+        "implemented": { "type": "boolean" },
+        "verified": { "type": "boolean" },
+        "wired": { "type": "boolean" },
+        "pilotEnabled": { "type": "boolean" },
+        "evidence": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/boundedString" }
+        }
       }
     }
   }
