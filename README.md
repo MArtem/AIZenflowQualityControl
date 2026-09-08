@@ -55,10 +55,11 @@ the first-party list; empty, unresolved, malformed, oversized, or path-escaping 
 evidence-free `BLOCKED`. A tracked Swift file is therefore not called shipped merely because it is
 present in Git.
 
-The catalog-backed deterministic adapters now include `QC.FORMAT.SWIFTFORMAT`,
+The catalog-backed deterministic adapters now include `QC.FORMAT.SWIFTFORMAT` (the legacy ID for
+Apple `swift-format`) and the separate newly implemented but mode-unwired `QC.LINT.SWIFTLINT`,
 `QC.PRIVACY.MANIFEST`, and `QC.CONFIGURATION.SIGNING` in addition to the tracked-secret, TODO
-ownership, generated ownership, dependency lock, localization, and resource checks. SwiftFormat
-remains a separate manual adapter invocation: it requires an explicitly pinned executable/version
+ownership, generated ownership, dependency lock, localization, and resource checks. Apple
+`swift-format` remains a separate manual adapter invocation: it requires an explicitly pinned executable/version
 and a tracked configuration, reports its tool/configuration digests, and never changes source files.
 Configuration/signing is a separate manual baseline comparison: it reports only explicitly listed
 release-sensitive path changes and never claims signing or App Store correctness.

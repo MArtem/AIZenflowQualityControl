@@ -55,7 +55,7 @@
         "type": "object", "additionalProperties": false,
         "required": ["id", "status", "message"],
         "properties": {
-          "id": {"enum": ["QC.SECRETS.TRACKED", "QC.TODO.OWNER", "QC.GENERATED.OWNERSHIP", "QC.DEPENDENCY.LOCK_DRIFT", "QC.LOCALIZATION.CATALOG", "QC.RESOURCES.ASSETS", "QC.FORMAT.SWIFTFORMAT", "QC.CONFIGURATION.SIGNING"]},
+          "id": {"enum": ["QC.SECRETS.TRACKED", "QC.TODO.OWNER", "QC.GENERATED.OWNERSHIP", "QC.DEPENDENCY.LOCK_DRIFT", "QC.LOCALIZATION.CATALOG", "QC.RESOURCES.ASSETS", "QC.FORMAT.SWIFTFORMAT", "QC.LINT.SWIFTLINT", "QC.CONFIGURATION.SIGNING"]},
           "status": {"enum": ["PASS", "FAIL", "BLOCKED"]},
           "message": {"type": "string", "minLength": 1, "maxLength": 1024},
           "findings": {

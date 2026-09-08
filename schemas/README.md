@@ -92,10 +92,11 @@ metadata, safe filename ownership, high-confidence literal resource references, 
 compiled resource outputs. Malformed, unsupported, oversized, traversal, or symlink inputs are
 `BLOCKED`; missing, duplicate, orphan, or forbidden resources are `FAIL`.
 
-The same schema permits `QC.FORMAT.SWIFTFORMAT`. Its optional `tool` object records the executable
-name, caller-verified version, and SHA-256 digest; its optional `configuration` object records the
-tracked configuration path and digest. The adapter scans only clean Git-HEAD Swift bytes through
-stdin and never writes or formats in place.
+The same schema permits `QC.FORMAT.SWIFTFORMAT` (the legacy ID for Apple `swift-format`) and
+`QC.LINT.SWIFTLINT`. Both bind optional `tool` and `configuration` objects to caller-verified
+version/digest and tracked config bytes. The formatter scans clean Git-HEAD Swift bytes through
+stdin; SwiftLint uses an explicit script-input file list and JSON reporter. Neither writes or
+autocorrects source in place, and SwiftLint remains separate from SwiftFormat and the legacy ID.
 
 The same schema permits `QC.CONFIGURATION.SIGNING`. Its `comparison` object binds the result to the
 trusted ancestor revision and tracked policy digest. This gate is only a deterministic

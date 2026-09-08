@@ -71,6 +71,10 @@ MAX_FORMAT_COMMAND_TIMEOUT_SECONDS = 5
 MAX_CONFIGURATION_POLICY_BYTES = 256 * 1024
 MAX_CONFIGURATION_PATHS = 256
 MAX_CONFIGURATION_DIFF_BYTES = 256 * 1024
+MAX_SWIFT_LINT_TOTAL_SECONDS = 120
+MAX_SWIFT_LINT_COMMAND_TIMEOUT_SECONDS = 10
+MAX_SWIFT_LINT_CONFIG_BYTES = 256 * 1024
+MAX_SWIFT_LINT_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_TEST_FILES = 4_096
 MAX_TEST_TOTAL_BYTES = 16 * 1024 * 1024
 MAX_SWIFT_HOT_PATH_FILES = 4_096
@@ -364,6 +368,77 @@ def format_configuration(root: Path, paths: list[str], path_value: str) -> tuple
     return text, {"path": path_value, "sha256": hashlib.sha256(data).hexdigest()}
 
 
+def swift_lint_tool(path_value: str, expected_version: str) -> tuple[Path, dict[str, str]]:
+    if not path_value.startswith("/") or len(path_value) > MAX_STRING_LENGTH:
+        raise AdapterError("SwiftLint tool path must be an absolute bounded path")
+    path = Path(path_value)
+    if path.is_symlink() or not path.is_file():
+        raise AdapterError("SwiftLint tool must be a regular non-symlink file")
+    try:
+        stat_result = path.stat()
+    except OSError as error:
+        raise AdapterError(f"SwiftLint tool metadata is unreadable: {error}") from error
+    if stat_result.st_mode & 0o111 == 0:
+        raise AdapterError("SwiftLint tool is not executable")
+    if stat_result.st_size > MAX_FORMAT_TOOL_BYTES:
+        raise AdapterError("SwiftLint tool exceeds the immutable byte limit")
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+/-]{0,127}", expected_version):
+        raise AdapterError("expected SwiftLint tool version is malformed")
+    try:
+        version_result = subprocess.run(
+            [str(path), "version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=format_environment(),
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError(f"SwiftLint tool version command failed: {error}") from error
+    if (
+        version_result.returncode != 0
+        or len(version_result.stdout) > MAX_FORMAT_TOOL_VERSION_BYTES
+        or len(version_result.stderr) > MAX_GREP_OUTPUT_BYTES
+    ):
+        raise AdapterError("SwiftLint tool version command failed")
+    try:
+        version = version_result.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise AdapterError("SwiftLint version output is not UTF-8") from error
+    if version != expected_version:
+        raise AdapterError(f"SwiftLint version mismatch: expected {expected_version}, observed {version}")
+    return path, {
+        "name": path.name,
+        "version": version,
+        "sha256": sha256_file(path, MAX_FORMAT_TOOL_BYTES),
+    }
+
+
+def swift_lint_configuration(root: Path, paths: list[str], path_value: str) -> tuple[str, dict[str, str]]:
+    if not path_value or path_value.startswith(("/", "~")) or "\\" in path_value:
+        raise AdapterError("SwiftLint configuration path must be a tracked relative path")
+    if any(part in ("", ".", "..") for part in path_value.split("/")):
+        raise AdapterError("SwiftLint configuration path contains traversal or empty segments")
+    if Path(path_value).suffix.lower() not in {".yml", ".yaml"}:
+        raise AdapterError("SwiftLint configuration must be a tracked YAML file")
+    if path_value not in paths:
+        raise AdapterError("SwiftLint configuration must be tracked in Git HEAD")
+    entries = tracked_tree_entries(root)
+    if entries.get(path_value) not in {"100644", "100755"}:
+        raise AdapterError("SwiftLint configuration must be a regular Git-tree file")
+    data = bounded_process(root, ["show", f"HEAD:{path_value}"], MAX_SWIFT_LINT_CONFIG_BYTES)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AdapterError("SwiftLint configuration must be valid UTF-8 YAML") from error
+    if not text.strip() or "\x00" in text:
+        raise AdapterError("SwiftLint configuration must be non-empty UTF-8 YAML")
+    if re.search(r"(?m)^\s*(?:disabled_rules|whitelist_rules|only_rules|excluded)\s*:", text):
+        raise AdapterError("SwiftLint rule/path suppression is not allowed without an explicit policy contract")
+    return text, {"path": path_value, "sha256": hashlib.sha256(data).hexdigest()}
+
+
 def configuration_signing_policy(
     root: Path,
     paths: list[str],
@@ -555,6 +630,120 @@ def findings_for_swift_format(
     return findings
 
 
+SWIFT_LINT_SUPPRESSION_PATTERN = re.compile(
+    r"//[^\r\n]{0,2048}\bswiftlint:(?:disable|enable)\b|"
+    r"/\*[\s\S]{0,4096}?\bswiftlint:(?:disable|enable)\b"
+)
+
+
+def swift_lint_source_paths(root: Path, paths: list[str]) -> list[str]:
+    sources = format_source_paths(root, paths)
+    if not sources:
+        raise AdapterError("SwiftLint requires at least one tracked Swift source")
+    return sources
+
+
+def findings_for_swift_lint_suppressions(root: Path, paths: list[str]) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for path in swift_lint_source_paths(root, paths):
+        data = bounded_process(root, ["show", f"HEAD:{path}"], MAX_FORMAT_FILE_BYTES)
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AdapterError(f"SwiftLint source must be UTF-8 text: {path}") from error
+        comment_visible = mask_swift_non_code(text, mask_comments=False)
+        for match in SWIFT_LINT_SUPPRESSION_PATTERN.finditer(comment_visible):
+            line = comment_visible[:match.start()].count("\n") + 1
+            findings.append({
+                "path": path,
+                "message": f"Inline SwiftLint suppression is not permitted at line {line}; use the explicit policy contract.",
+            })
+            if len(findings) >= MAX_FINDINGS:
+                return findings
+    return findings
+
+
+def findings_for_swift_lint(
+    root: Path,
+    paths: list[str],
+    tool_path: Path,
+    configuration_path: str,
+) -> list[dict[str, str]]:
+    suppression_findings = findings_for_swift_lint_suppressions(root, paths)
+    if suppression_findings:
+        return suppression_findings
+    sources = swift_lint_source_paths(root, paths)
+    input_environment = format_environment()
+    input_environment["SCRIPT_INPUT_FILE_COUNT"] = str(len(sources))
+    for index, path in enumerate(sources):
+        input_environment[f"SCRIPT_INPUT_FILE_{index}"] = str(root / path)
+    deadline = time.monotonic() + MAX_SWIFT_LINT_TOTAL_SECONDS
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AdapterError("SwiftLint check exceeded the immutable time limit")
+    try:
+        result = subprocess.run(
+            [
+                str(tool_path), "lint", "--strict", "--no-cache", "--reporter", "json",
+                "--config", str(root / configuration_path), "--use-script-input-files",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=input_environment,
+            cwd=str(root),
+            timeout=min(MAX_SWIFT_LINT_COMMAND_TIMEOUT_SECONDS, remaining),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError(f"SwiftLint execution failed: {error}") from error
+    total_bytes = len(result.stdout) + len(result.stderr)
+    if total_bytes > MAX_SWIFT_LINT_OUTPUT_BYTES:
+        raise AdapterError("SwiftLint output exceeded the immutable limit")
+    if result.returncode not in {0, 1}:
+        diagnostic = result.stderr.decode("utf-8", errors="replace").strip()
+        raise AdapterError(f"SwiftLint infrastructure failure: {diagnostic[:MAX_STRING_LENGTH]}")
+    try:
+        payload = json.loads(result.stdout.decode("utf-8")) if result.stdout.strip() else []
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AdapterError("SwiftLint JSON reporter output is malformed") from error
+    if not isinstance(payload, list) or len(payload) > MAX_FINDINGS:
+        raise AdapterError("SwiftLint JSON reporter output has an unsupported shape")
+    findings: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise AdapterError("SwiftLint JSON reporter finding is malformed")
+        raw_path = item.get("file")
+        reason = item.get("reason")
+        if not isinstance(raw_path, str) or not isinstance(reason, str) or not reason.strip():
+            raise AdapterError("SwiftLint JSON reporter finding lacks a bounded path or reason")
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            relative = candidate.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError as error:
+            raise AdapterError("SwiftLint finding escapes the authenticated repository root") from error
+        if relative not in sources:
+            raise AdapterError("SwiftLint finding refers to a non-selected source path")
+        line = item.get("line")
+        line_text = f" at line {line}" if isinstance(line, int) and line > 0 else ""
+        rule = item.get("rule_id")
+        rule_text = f" [{rule}]" if isinstance(rule, str) and rule else ""
+        findings.append({
+            "path": relative,
+            "message": f"SwiftLint diagnostic{rule_text}{line_text}: {reason}"[:MAX_STRING_LENGTH],
+        })
+    if result.returncode == 1 and not findings:
+        findings.append({
+            "path": sources[0],
+            "message": "SwiftLint reported a violation without a structured diagnostic.",
+        })
+    if result.returncode == 0 and findings:
+        raise AdapterError("SwiftLint returned PASS with non-empty diagnostics")
+    return findings
+
+
 def catalog_entry(catalog: dict[str, Any], check_id: str) -> None:
     if set(catalog) != {"schemaVersion", "catalogVersion", "checks"}:
         raise AdapterError("catalog has an unsupported property set")
@@ -712,7 +901,7 @@ def swift_hot_path_source_paths(root: Path, paths: list[str]) -> list[str]:
     return selected
 
 
-def mask_swift_non_code(text: str) -> str:
+def mask_swift_non_code(text: str, *, mask_comments: bool = True) -> str:
     """Mask Swift comments and string literal text while preserving interpolation code and lines.
 
     This is deliberately a bounded lexical adapter, not a Swift parser. It keeps code inside
@@ -760,7 +949,8 @@ def mask_swift_non_code(text: str) -> str:
                 depth -= 1
                 position += 2
                 if depth == 0:
-                    mask_range(index, position)
+                    if mask_comments:
+                        mask_range(index, position)
                     return position
                 continue
             position += 1
@@ -802,9 +992,11 @@ def mask_swift_non_code(text: str) -> str:
             if text.startswith("//", position):
                 newline = text.find("\n", position + 2)
                 if newline == -1:
-                    mask_range(position, len(text))
+                    if mask_comments:
+                        mask_range(position, len(text))
                     raise AdapterError("Swift source contains an unterminated string interpolation")
-                mask_range(position, newline)
+                if mask_comments:
+                    mask_range(position, newline)
                 position = newline
                 continue
             if text.startswith("/*", position):
@@ -829,9 +1021,11 @@ def mask_swift_non_code(text: str) -> str:
         if text.startswith("//", position):
             newline = text.find("\n", position + 2)
             if newline == -1:
-                mask_range(position, len(text))
+                if mask_comments:
+                    mask_range(position, len(text))
                 break
-            mask_range(position, newline)
+            if mask_comments:
+                mask_range(position, newline)
             position = newline
             continue
         if text.startswith("/*", position):
@@ -2196,6 +2390,40 @@ def main() -> int:
                 revision,
                 "PASS",
                 "All tracked Swift sources passed the caller-pinned SwiftFormat check.",
+                tool=tool_info,
+                configuration=configuration_info,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if arguments.check == "QC.LINT.SWIFTLINT":
+            if not arguments.tool_path or not arguments.tool_version or not arguments.configuration_path:
+                raise AdapterError(
+                    "QC.LINT.SWIFTLINT requires --tool-path, --tool-version, and --configuration-path"
+                )
+            tool_path, tool_info = swift_lint_tool(arguments.tool_path, arguments.tool_version)
+            _, configuration_info = swift_lint_configuration(
+                root, paths, arguments.configuration_path
+            )
+            findings = findings_for_swift_lint(
+                root, paths, tool_path, arguments.configuration_path
+            )
+            if findings:
+                result = report(
+                    arguments.check,
+                    revision,
+                    "FAIL",
+                    "SwiftLint reported diagnostics or an unapproved inline suppression in tracked Swift sources.",
+                    findings,
+                    tool=tool_info,
+                    configuration=configuration_info,
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return 1
+            result = report(
+                arguments.check,
+                revision,
+                "PASS",
+                "All tracked Swift sources passed the caller-pinned SwiftLint check with no inline suppression.",
                 tool=tool_info,
                 configuration=configuration_info,
             )

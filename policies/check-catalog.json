@@ -74,7 +74,7 @@
     },
     {
       "id": "QC.FORMAT.SWIFTFORMAT",
-      "scope": "Pinned SwiftFormat check-only output",
+      "scope": "Pinned Apple swift-format check-only output (legacy catalog ID)",
       "severity": "block",
       "applicability": "profile",
       "remediation": "Run the pinned formatter locally and commit the resulting formatting changes.",
@@ -84,13 +84,13 @@
     },
     {
       "id": "QC.LINT.SWIFTLINT",
-      "scope": "Pinned SwiftLint rules and custom deterministic violations",
+      "scope": "Caller-pinned SwiftLint rules and custom deterministic violations for tracked Swift sources",
       "severity": "block",
       "applicability": "profile",
-      "remediation": "Resolve lint errors using the repository-pinned SwiftLint configuration.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged",
-      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
+      "remediation": "Resolve SwiftLint diagnostics or establish an explicitly reviewed configuration; no inline suppression or autocorrect is allowed by this gate.",
+      "fixture": { "positive": "fixtures/swiftlint/passing-project/", "negative": "fixtures/swiftlint/failing-project/" },
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.SECRETS.TRACKED",

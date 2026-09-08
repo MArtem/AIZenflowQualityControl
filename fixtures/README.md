@@ -38,10 +38,16 @@ contains a missing asset filename and a tracked compiled `.car` output; the reso
 return `FAIL`. Malformed JSON, traversal, duplicate references, symlink, orphan, and loose-resource
 cases are covered by focused adapter tests.
 
-`format/passing-project/` contains a tracked bounded SwiftFormat configuration and already formatted
-Swift source. `format/failing-project/` uses the same configuration with spacing and indentation
-violations; a caller-pinned `swift-format` invocation must return `FAIL` without modifying either
+`format/passing-project/` contains a tracked bounded Apple `swift-format` configuration and already
+formatted Swift source. `format/failing-project/` uses the same configuration with spacing and
+indentation violations; a caller-pinned `swift-format` invocation must return `FAIL` without modifying either
 fixture.
+
+`swiftlint/passing-project/` and `swiftlint/failing-project/` are inert positive/negative source
+contracts for the separate SwiftLint adapter. They are not verified until the permitted canary
+phase; the adapter must pin the executable/version/config digest, lint only the authenticated source
+list, emit structured JSON findings, reject unapproved rule/path suppression and inline directives,
+and never run autocorrect.
 
 `configuration-signing/passing-project/` and `configuration-signing/failing-project/` contain an
 explicit tracked release-sensitive path policy. The adapter harness creates a trusted baseline and

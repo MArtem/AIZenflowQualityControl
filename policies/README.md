@@ -51,11 +51,21 @@ literal resource references. Malformed, unsupported, oversized, traversal, or sy
 outputs are `FAIL`. Dynamic names, runtime bundle membership, and visual/linguistic correctness
 remain outside the static claim.
 
-`QC.FORMAT.SWIFTFORMAT` is an executable, repository-neutral adapter. It requires a caller-pinned
-regular `swift-format` executable and exact expected version, plus a tracked JSON configuration.
-It lints only regular Swift files from a clean Git `HEAD` through stdin and records tool/configuration
-digests. Formatter diagnostics are `FAIL`; missing, malformed, mismatched, unavailable, or
-resource-limited inputs are `BLOCKED`. It never performs in-place formatting.
+`QC.FORMAT.SWIFTFORMAT` is the retained legacy ID for the Apple `swift-format` executable; it is
+not third-party SwiftFormat and is not SwiftLint. It requires a caller-pinned regular executable
+and exact expected version, plus a tracked JSON configuration. It lints only regular Swift files
+from a clean Git `HEAD` through stdin and records tool/configuration digests. Formatter diagnostics
+are `FAIL`; missing, malformed, mismatched, unavailable, or resource-limited inputs are `BLOCKED`.
+It never performs in-place formatting.
+
+`QC.LINT.SWIFTLINT` is a separate implemented but not yet mode-wired adapter. It requires a
+caller-pinned SwiftLint executable/version and tracked YAML configuration, passes an explicit clean-
+HEAD file list through SwiftLint's script-input boundary, requests JSON diagnostics, applies bounded
+timeouts/output, and never invokes autocorrect. Unapproved YAML rule/path suppression and inline
+`swiftlint:disable`/`enable` directives are `BLOCKED`/`FAIL`; missing, malformed, mismatched,
+unavailable, timeout, output-overflow, or infrastructure outcomes never become `PASS`. Its maturity
+remains `verified=false`, `wired=false`, and `pilotEnabled=false` until the permitted canary/pilot
+phase exercises it.
 
 `QC.CONFIGURATION.SIGNING` is an executable, repository-neutral change detector. A tracked policy
 lists exact release-sensitive paths and is required to be byte-identical in the trusted ancestor
