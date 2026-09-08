@@ -120,3 +120,11 @@ identity and bounded external-input counts. It is a narrow compiled-input claim;
 tracked files into shipped files. Generated ownership, extension membership, and external package
 inputs retain their separate semantics, and the build PASS branch requires this receipt together
 with `QC.BUILD.MEMBERSHIP`.
+
+The build PASS branch also requires `QC.BUILD.FIRST_PARTY_WARNINGS` and
+`QC.CONCURRENCY.DIAGNOSTICS`. Their facts come from the same stable structured `xcresult` reads:
+selected-target diagnostics must be attributable to compiler membership, while dependency,
+external, generated, and non-selected-target diagnostics are excluded from the first-party claim.
+An unattributed diagnostic blocks the result. No warning baseline is inferred or auto-created; the
+current adapter treats an authenticated first-party warning as new until a later explicit baseline
+contract is adopted.

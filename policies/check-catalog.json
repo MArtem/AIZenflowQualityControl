@@ -49,8 +49,8 @@
       "applicability": "profile",
       "remediation": "Resolve new first-party warnings or record an approved bounded exception.",
       "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged",
-      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": true, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.CONCURRENCY.DIAGNOSTICS",
@@ -59,8 +59,8 @@
       "applicability": "profile",
       "remediation": "Resolve compiler concurrency diagnostics at the correct actor or Sendable boundary.",
       "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
-      "implementation": "staged",
-      "maturity": { "implemented": false, "verified": false, "wired": false, "pilotEnabled": false, "evidence": [] }
+      "implementation": "implemented",
+      "maturity": { "implemented": true, "verified": false, "wired": true, "pilotEnabled": false, "evidence": [] }
     },
     {
       "id": "QC.DEPENDENCY.LOCK_DRIFT",

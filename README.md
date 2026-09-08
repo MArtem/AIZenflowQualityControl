@@ -55,6 +55,15 @@ the first-party list; empty, unresolved, malformed, oversized, or path-escaping 
 evidence-free `BLOCKED`. A tracked Swift file is therefore not called shipped merely because it is
 present in Git.
 
+The same authenticated build report now feeds `QC.BUILD.FIRST_PARTY_WARNINGS` and
+`QC.CONCURRENCY.DIAGNOSTICS`. Only diagnostics tied to the selected target and compiler membership
+are assigned to the current source revision; external, dependency, generated, and non-selected-target
+inputs are excluded, while an unattributed selected-target diagnostic is `BLOCKED`. The complete
+structured report is required, so a text-log tail, failed/partial/truncated report, or empty
+membership cannot produce a clean result. This version does not assume a warning baseline: every
+authenticated first-party warning is treated as new until a separately approved baseline contract
+exists.
+
 The catalog-backed deterministic adapters now include `QC.FORMAT.SWIFTFORMAT` (the legacy ID for
 Apple `swift-format`) and the separate newly implemented but mode-unwired `QC.LINT.SWIFTLINT`,
 `QC.PRIVACY.MANIFEST`, and `QC.CONFIGURATION.SIGNING` in addition to the tracked-secret, TODO

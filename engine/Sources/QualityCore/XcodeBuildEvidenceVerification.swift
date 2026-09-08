@@ -11,6 +11,19 @@ package struct XcodeBuildDestinationObservation: Equatable, Sendable {
     package let osBuildNumber: String?
 }
 
+/// A bounded diagnostic fact extracted from the authenticated structured build report.
+///
+/// The source path is retained only as a repository-relative path.  An external source-looking
+/// input is represented by `sourceIsExternal` without retaining its machine path, so consumers
+/// can exclude dependency diagnostics without leaking paths or attributing them to the checkout.
+package struct XcodeBuildDiagnosticObservation: Equatable, Sendable {
+    package let issueType: String
+    package let targetName: String?
+    package let sourcePath: String?
+    package let sourceIsExternal: Bool
+    package let isConcurrencyDiagnostic: Bool
+}
+
 package struct XcodeBuildEvidenceObservation: Equatable, Sendable {
     package static let buildResultsSchemaVersion = "0.1.0"
 
@@ -25,6 +38,7 @@ package struct XcodeBuildEvidenceObservation: Equatable, Sendable {
     package let compiledSourcePaths: [String]
     package let compilerSectionCount: Int
     package let externalSourceInputCount: Int
+    package let diagnostics: [XcodeBuildDiagnosticObservation]
 
     package init(
         buildResultsSHA256: String,
@@ -37,7 +51,8 @@ package struct XcodeBuildEvidenceObservation: Equatable, Sendable {
         analyzerWarningCount: Int,
         compiledSourcePaths: [String],
         compilerSectionCount: Int,
-        externalSourceInputCount: Int = 0
+        externalSourceInputCount: Int = 0,
+        diagnostics: [XcodeBuildDiagnosticObservation] = []
     ) {
         self.buildResultsSHA256 = buildResultsSHA256
         self.buildLogSHA256 = buildLogSHA256
@@ -50,6 +65,7 @@ package struct XcodeBuildEvidenceObservation: Equatable, Sendable {
         self.compiledSourcePaths = compiledSourcePaths
         self.compilerSectionCount = compilerSectionCount
         self.externalSourceInputCount = externalSourceInputCount
+        self.diagnostics = diagnostics
     }
 }
 
@@ -64,6 +80,7 @@ package enum XcodeBuildEvidenceVerificationError: Error, Equatable {
     case invalidBuildTiming
     case invalidBuildDestination
     case issueLimitExceeded
+    case invalidDiagnosticSource
     case sourceMembership(XcodeBuildLogMembershipError)
 }
 
@@ -146,6 +163,15 @@ package enum XcodeBuildEvidenceVerifier {
             throw XcodeBuildEvidenceVerificationError.issueLimitExceeded
         }
 
+        let diagnostics: [XcodeBuildDiagnosticObservation]
+        do {
+            diagnostics = try result.analyzerWarnings
+                .map { try makeDiagnostic($0, repositoryRoot: repositoryRoot) }
+                + result.warnings.map { try makeDiagnostic($0, repositoryRoot: repositoryRoot) }
+        } catch {
+            throw XcodeBuildEvidenceVerificationError.invalidDiagnosticSource
+        }
+
         let membership: XcodeBuildLogMembershipObservation
         do {
             membership = try XcodeBuildLogMembershipExtractor.extract(
@@ -179,7 +205,8 @@ package enum XcodeBuildEvidenceVerifier {
                 ?? result.analyzerWarnings.count,
             compiledSourcePaths: membership.compiledSourcePaths,
             compilerSectionCount: membership.compilerSectionCount,
-            externalSourceInputCount: membership.externalSourceInputCount
+            externalSourceInputCount: membership.externalSourceInputCount,
+            diagnostics: diagnostics
         )
     }
 
@@ -197,6 +224,85 @@ package enum XcodeBuildEvidenceVerifier {
 
     fileprivate static func isBoundedOptional(_ value: String?) -> Bool {
         value == nil || isBoundedNonEmpty(value!)
+    }
+
+    private static func makeDiagnostic(
+        _ issue: BuildResultsIssue,
+        repositoryRoot: URL
+    ) throws -> XcodeBuildDiagnosticObservation {
+        let source = try normalizeDiagnosticSource(
+            issue.sourceURL,
+            repositoryRoot: repositoryRoot
+        )
+        return XcodeBuildDiagnosticObservation(
+            issueType: issue.issueType,
+            targetName: issue.targetName,
+            sourcePath: source.relativePath,
+            sourceIsExternal: source.isExternal,
+            isConcurrencyDiagnostic: isConcurrencyDiagnostic(issue.message)
+        )
+    }
+
+    private static func normalizeDiagnosticSource(
+        _ rawValue: String?,
+        repositoryRoot: URL
+    ) throws -> (relativePath: String?, isExternal: Bool) {
+        guard let rawValue else {
+            return (nil, false)
+        }
+        let candidate: URL
+        if let url = URL(string: rawValue), url.isFileURL {
+            candidate = url
+        } else if rawValue.hasPrefix("/") {
+            candidate = URL(fileURLWithPath: rawValue)
+        } else {
+            throw XcodeBuildEvidenceVerificationError.invalidDiagnosticSource
+        }
+
+        let canonicalRoot = repositoryRoot.resolvingSymlinksInPath().standardizedFileURL
+        let standardized = candidate.standardizedFileURL
+        guard let relative = relativePath(standardized, root: canonicalRoot) else {
+            return (nil, true)
+        }
+        let resolved = standardized.resolvingSymlinksInPath().standardizedFileURL
+        guard ProfileValidator.resolvesWithinRepository(
+            resolved,
+            root: canonicalRoot,
+            allowingRoot: false
+        ) else {
+            throw XcodeBuildEvidenceVerificationError.invalidDiagnosticSource
+        }
+        return (relative, false)
+    }
+
+    private static func relativePath(_ candidate: URL, root: URL) -> String? {
+        let rootPath = root.path
+        let candidatePath = candidate.path
+        guard candidatePath.hasPrefix(rootPath + "/") else {
+            return nil
+        }
+        let value = String(candidatePath.dropFirst(rootPath.count + 1))
+        guard !value.isEmpty,
+              !value.contains("\\"),
+              !value.split(separator: "/").contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func isConcurrencyDiagnostic(_ message: String) -> Bool {
+        let lowercased = message.lowercased()
+        let markers = [
+            "actor-isolated",
+            "main actor",
+            "non-sendable",
+            "sendable",
+            "sending",
+            "concurrency",
+            "nonisolated",
+            "global actor"
+        ]
+        return markers.contains(where: lowercased.contains)
     }
 }
 

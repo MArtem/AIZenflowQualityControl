@@ -88,3 +88,12 @@ declared scheme/target/configuration/destination. Generated ownership remains a 
 extension inputs are included only when observed; external package source-looking inputs are
 counted but excluded from the first-party list. Empty, unresolved, outside-scope, symlink-escaping,
 malformed, or unavailable membership is `BLOCKED`, never an empty successful scan.
+
+`QC.BUILD.FIRST_PARTY_WARNINGS` and `QC.CONCURRENCY.DIAGNOSTICS` consume the same authenticated
+structured `xcresult` report. They classify only diagnostics attributable to the selected target
+and compiler membership; dependency, external, generated, and non-selected-target inputs are not
+silently assigned to the current revision. An unattributed selected-target diagnostic is
+`BLOCKED`, while an authenticated first-party warning is treated as new because no warning
+baseline is assumed by this version. The gates never parse a text-log tail and never turn a
+partial, truncated, failed, or zero-membership build into `PASS`. Warning-baseline persistence and
+promotion remain a later explicit contract; no baseline is deleted or auto-created here.

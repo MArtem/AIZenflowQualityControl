@@ -53,6 +53,9 @@ package enum XcodeBuildEvidenceCoordinationError: Error, Equatable {
     case undeclaredSelection
     case buildExecutionProhibited
     case missingBuildAuthorization
+    case firstPartyWarnings
+    case concurrencyDiagnostics
+    case unattributedDiagnostics
     case verificationFailed
 }
 
@@ -81,6 +84,20 @@ package enum XcodeBuildEvidenceCoordinator {
             profile: profile
         ) else {
             throw XcodeBuildEvidenceCoordinationError.invalidTrustedContext
+        }
+        let diagnostics = classifyDiagnostics(
+            observation: observation,
+            sourceMembership: sourceMembership,
+            profile: profile
+        )
+        guard diagnostics.unattributedWarningCount == 0 else {
+            throw XcodeBuildEvidenceCoordinationError.unattributedDiagnostics
+        }
+        guard diagnostics.newFirstPartyWarningCount == 0 else {
+            throw XcodeBuildEvidenceCoordinationError.firstPartyWarnings
+        }
+        guard diagnostics.concurrencyDiagnosticCount == 0 else {
+            throw XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics
         }
 
         let buildAction = context.executionAction
@@ -122,6 +139,20 @@ package enum XcodeBuildEvidenceCoordinator {
             commandID: command.id,
             actions: [buildAction]
         )
+        let firstPartyWarningsGate = EvidenceGate(
+            id: "QC.BUILD.FIRST_PARTY_WARNINGS",
+            status: .pass,
+            message: diagnostics.warningsMessage,
+            commandID: command.id,
+            actions: [buildAction]
+        )
+        let concurrencyGate = EvidenceGate(
+            id: "QC.CONCURRENCY.DIAGNOSTICS",
+            status: .pass,
+            message: diagnostics.concurrencyMessage,
+            commandID: command.id,
+            actions: [buildAction]
+        )
         let evidence = QualityEvidence(
             sourceRepository: context.sourceRepository,
             sourceRevision: context.sourceRevision,
@@ -132,7 +163,7 @@ package enum XcodeBuildEvidenceCoordinator {
             toolchain: context.toolchain,
             permissions: profile.permissions,
             commands: [command],
-            gates: [gate, membershipGate],
+            gates: [gate, membershipGate, firstPartyWarningsGate, concurrencyGate],
             sourceMembership: sourceMembership,
             artifacts: artifacts,
             claimedVerdict: .ready
@@ -165,6 +196,18 @@ package enum XcodeBuildEvidenceCoordinator {
                     actions: [buildAction],
                     status: membershipGate.status,
                     message: membershipGate.message
+                ),
+                firstPartyWarningsGate.id: EvidenceGateExpectation(
+                    commandID: firstPartyWarningsGate.commandID,
+                    actions: [buildAction],
+                    status: firstPartyWarningsGate.status,
+                    message: firstPartyWarningsGate.message
+                ),
+                concurrencyGate.id: EvidenceGateExpectation(
+                    commandID: concurrencyGate.commandID,
+                    actions: [buildAction],
+                    status: concurrencyGate.status,
+                    message: concurrencyGate.message
                 )
             ],
             userAuthorizedActions: [buildAction],
@@ -173,7 +216,19 @@ package enum XcodeBuildEvidenceCoordinator {
             )
         )
         let verification = EvidenceVerifier.verify(evidence, expected: expected)
-        guard verification.issues.isEmpty, verification.verdict == .ready else {
+        guard verification.issues.isEmpty else {
+            throw XcodeBuildEvidenceCoordinationError.verificationFailed
+        }
+        if diagnostics.unattributedWarningCount > 0 {
+            throw XcodeBuildEvidenceCoordinationError.unattributedDiagnostics
+        }
+        if diagnostics.newFirstPartyWarningCount > 0 {
+            throw XcodeBuildEvidenceCoordinationError.firstPartyWarnings
+        }
+        if diagnostics.concurrencyDiagnosticCount > 0 {
+            throw XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics
+        }
+        guard verification.verdict == .ready else {
             throw XcodeBuildEvidenceCoordinationError.verificationFailed
         }
 
@@ -225,6 +280,22 @@ package enum XcodeBuildEvidenceCoordinator {
     ) -> String {
         let selection = observation.selection
         let profile = context.profileSnapshot.profile
+        let diagnostics = makeSourceMembership(
+            observation: observation,
+            profile: profile
+        ).map {
+            classifyDiagnostics(
+                observation: observation,
+                sourceMembership: $0,
+                profile: profile
+            )
+        } ?? DiagnosticClassification(
+            firstPartyWarningCount: 0,
+            newFirstPartyWarningCount: 0,
+            concurrencyDiagnosticCount: 0,
+            dependencyOrGeneratedWarningCount: 0,
+            unattributedWarningCount: observation.evidence.diagnostics.count
+        )
         let declaredTargets = profile.xcode?.schemes.first(where: {
             $0.name == selection.scheme
                 && $0.configurations.contains(selection.configuration)
@@ -249,6 +320,7 @@ package enum XcodeBuildEvidenceCoordinator {
             observation.evidence.compiledSourcePaths.joined(separator: "\n"),
             String(observation.evidence.compilerSectionCount),
             String(observation.evidence.externalSourceInputCount),
+            diagnostics.commandIdentity,
             context.executionAction.rawValue,
             String(buildTimeoutSeconds)
         ]
@@ -289,6 +361,12 @@ package enum XcodeBuildEvidenceCoordinator {
             && observation.evidence.compiledSourcePaths == observation.evidence.compiledSourcePaths.sorted(by: bytewiseLessThan)
             && Set(observation.evidence.compiledSourcePaths).count == observation.evidence.compiledSourcePaths.count
             && observation.evidence.compiledSourcePaths.allSatisfy(isSafeRelativePath)
+            && observation.evidence.diagnostics.count <= 10_000
+            && observation.evidence.diagnostics.allSatisfy {
+                EvidenceVerifier.isBoundedNonEmptyString($0.issueType)
+                    && $0.targetName.map(EvidenceVerifier.isBoundedNonEmptyString) != false
+                    && $0.sourcePath.map(isSafeRelativePath) != false
+            }
     }
 
     private static func selectionIsDeclared(
@@ -326,6 +404,115 @@ package enum XcodeBuildEvidenceCoordinator {
             externalSourceInputCount: observation.evidence.externalSourceInputCount,
             claims: SourceMembershipClaim.allCases
         )
+    }
+
+    private struct DiagnosticClassification {
+        let firstPartyWarningCount: Int
+        let newFirstPartyWarningCount: Int
+        let concurrencyDiagnosticCount: Int
+        let dependencyOrGeneratedWarningCount: Int
+        let unattributedWarningCount: Int
+
+        var warningsMessage: String {
+            if unattributedWarningCount > 0 {
+                return "The structured build report contains \(unattributedWarningCount) selected-target warning(s) whose source membership cannot be authenticated; clean first-party warning status is BLOCKED."
+            }
+            if newFirstPartyWarningCount == 0 {
+                return "The complete structured build report contains no authenticated first-party warnings. No warning baseline is assumed; any first-party warning is treated as new until an approved baseline contract exists."
+            }
+            return "The complete structured build report contains \(newFirstPartyWarningCount) authenticated first-party warning(s) treated as new; \(dependencyOrGeneratedWarningCount) dependency/generated or non-selected-target warning(s) were excluded from the first-party claim."
+        }
+
+        var concurrencyMessage: String {
+            if unattributedWarningCount > 0 {
+                return "Concurrency diagnostic status is BLOCKED because selected-target diagnostics are not fully attributable to authenticated compiler membership."
+            }
+            if concurrencyDiagnosticCount == 0 {
+                return "The complete structured build report contains no authenticated first-party Swift concurrency diagnostics."
+            }
+            return "The complete structured build report contains \(concurrencyDiagnosticCount) authenticated first-party Swift concurrency diagnostic(s)."
+        }
+
+        var commandIdentity: String {
+            [
+                String(firstPartyWarningCount),
+                String(newFirstPartyWarningCount),
+                String(concurrencyDiagnosticCount),
+                String(dependencyOrGeneratedWarningCount),
+                String(unattributedWarningCount)
+            ].joined(separator: ":")
+        }
+    }
+
+    private static func classifyDiagnostics(
+        observation: XcodeBuildSupervisionObservation,
+        sourceMembership: SourceMembershipEvidence,
+        profile: ProjectProfile
+    ) -> DiagnosticClassification {
+        guard let scheme = profile.xcode?.schemes.first(where: {
+            $0.name == observation.selection.scheme
+                && $0.configurations.contains(observation.selection.configuration)
+                && $0.destinations.contains(observation.selection.destination)
+        }) else {
+            return DiagnosticClassification(
+                firstPartyWarningCount: 0,
+                newFirstPartyWarningCount: 0,
+                concurrencyDiagnosticCount: 0,
+                dependencyOrGeneratedWarningCount: 0,
+                unattributedWarningCount: observation.evidence.diagnostics.count
+            )
+        }
+
+        let selectedTargets = Set(scheme.targets)
+        let compiledSources = Set(sourceMembership.compiledSourcePaths)
+        var firstPartyWarningCount = 0
+        var concurrencyDiagnosticCount = 0
+        var dependencyOrGeneratedWarningCount = 0
+        var unattributedWarningCount = 0
+
+        for diagnostic in observation.evidence.diagnostics {
+            if let targetName = diagnostic.targetName,
+               !selectedTargets.contains(targetName) {
+                dependencyOrGeneratedWarningCount += 1
+                continue
+            }
+            if diagnostic.sourceIsExternal {
+                dependencyOrGeneratedWarningCount += 1
+                continue
+            }
+            if let sourcePath = diagnostic.sourcePath,
+               !compiledSources.contains(sourcePath) {
+                if isLikelyGeneratedPath(sourcePath) {
+                    dependencyOrGeneratedWarningCount += 1
+                } else {
+                    unattributedWarningCount += 1
+                }
+                continue
+            }
+            firstPartyWarningCount += 1
+            if diagnostic.isConcurrencyDiagnostic {
+                concurrencyDiagnosticCount += 1
+            }
+        }
+
+        return DiagnosticClassification(
+            firstPartyWarningCount: firstPartyWarningCount,
+            newFirstPartyWarningCount: firstPartyWarningCount,
+            concurrencyDiagnosticCount: concurrencyDiagnosticCount,
+            dependencyOrGeneratedWarningCount: dependencyOrGeneratedWarningCount,
+            unattributedWarningCount: unattributedWarningCount
+        )
+    }
+
+    private static func isLikelyGeneratedPath(_ path: String) -> Bool {
+        let components = path.split(separator: "/").map(String.init)
+        return components.contains(where: { component in
+            let lowercased = component.lowercased()
+            return lowercased == "generated"
+                || lowercased == "derivedsources"
+                || lowercased == "deriveddata"
+                || lowercased.hasSuffix(".generated")
+        })
     }
 
     private static func isSafeRelativePath(_ value: String) -> Bool {
@@ -399,6 +586,16 @@ public struct XcodeBuildEvidenceExecutionResult: Encodable, Sendable {
                     id: "QC.BUILD.MEMBERSHIP",
                     status: .pass,
                     message: "The build receipt contains verified explicit-scope and compiler-membership evidence."
+                ),
+                QualityCheck(
+                    id: "QC.BUILD.FIRST_PARTY_WARNINGS",
+                    status: .pass,
+                    message: "The build receipt contains no authenticated new first-party compiler warnings."
+                ),
+                QualityCheck(
+                    id: "QC.CONCURRENCY.DIAGNOSTICS",
+                    status: .pass,
+                    message: "The build receipt contains no authenticated first-party Swift concurrency diagnostics."
                 )
             ]
         )
@@ -516,6 +713,21 @@ package enum XcodeBuildEvidenceExecution {
                     observation: observation,
                     context: initialContext
                 )
+            )
+        } catch XcodeBuildEvidenceCoordinationError.firstPartyWarnings {
+            return failed(
+                "QC.BUILD.FIRST_PARTY_WARNINGS",
+                "The authenticated build contains new first-party compiler warnings."
+            )
+        } catch XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics {
+            return failed(
+                "QC.CONCURRENCY.DIAGNOSTICS",
+                "The authenticated build contains first-party Swift concurrency diagnostics."
+            )
+        } catch XcodeBuildEvidenceCoordinationError.unattributedDiagnostics {
+            return blocked(
+                "QC.BUILD.FIRST_PARTY_WARNINGS",
+                "Selected-target compiler warnings could not be attributed to authenticated first-party membership."
             )
         } catch {
             return blocked(

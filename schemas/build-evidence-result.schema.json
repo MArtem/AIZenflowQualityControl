@@ -22,7 +22,22 @@
             { "properties": { "status": { "const": "PASS" } } },
             { "properties": { "checks": { "items": { "properties": { "status": { "const": "PASS" } } } } } },
             { "properties": { "checks": {
+              "contains": { "properties": { "id": { "const": "QC.BUILD" } }, "required": ["id"] },
+              "minContains": 1,
+              "maxContains": 1
+            } } },
+            { "properties": { "checks": {
               "contains": { "properties": { "id": { "const": "QC.BUILD.MEMBERSHIP" } }, "required": ["id"] },
+              "minContains": 1,
+              "maxContains": 1
+            } } },
+            { "properties": { "checks": {
+              "contains": { "properties": { "id": { "const": "QC.BUILD.FIRST_PARTY_WARNINGS" } }, "required": ["id"] },
+              "minContains": 1,
+              "maxContains": 1
+            } } },
+            { "properties": { "checks": {
+              "contains": { "properties": { "id": { "const": "QC.CONCURRENCY.DIAGNOSTICS" } }, "required": ["id"] },
               "minContains": 1,
               "maxContains": 1
             } } }
@@ -57,11 +72,11 @@
                   }
                 },
                 "gates": {
-                  "minItems": 2,
-                  "maxItems": 2,
-                  "items": {
-                    "properties": {
-                      "id": { "enum": ["QC.BUILD", "QC.BUILD.MEMBERSHIP"] },
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {
+                  "properties": {
+                      "id": { "enum": ["QC.BUILD", "QC.BUILD.MEMBERSHIP", "QC.BUILD.FIRST_PARTY_WARNINGS", "QC.CONCURRENCY.DIAGNOSTICS"] },
                       "status": { "const": "PASS" },
                       "commandID": { "const": "xcode-build" },
                       "actions": {
@@ -84,6 +99,22 @@
                     {
                       "contains": {
                         "properties": { "id": { "const": "QC.BUILD.MEMBERSHIP" } },
+                        "required": ["id"]
+                      },
+                      "minContains": 1,
+                      "maxContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": { "id": { "const": "QC.BUILD.FIRST_PARTY_WARNINGS" } },
+                        "required": ["id"]
+                      },
+                      "minContains": 1,
+                      "maxContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": { "id": { "const": "QC.CONCURRENCY.DIAGNOSTICS" } },
                         "required": ["id"]
                       },
                       "minContains": 1,
