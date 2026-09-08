@@ -58,6 +58,42 @@ struct XcodeBuildEvidenceExecutionTests {
         #expect(result.verification == nil)
     }
 
+    @Test("A first-party warning produces FAIL without evidence")
+    func firstPartyWarningProducesFail() throws {
+        let initial = try context()
+        let result = XcodeBuildEvidenceExecution.execute(
+            initialContext: initial,
+            selection: selection,
+            runBuild: { _, _ in buildObservation(diagnostics: [
+                buildDiagnostic(sourcePath: "Sources/App.swift")
+            ]) },
+            observeFinalContext: { initial }
+        )
+
+        #expect(result.status == .fail)
+        #expect(result.report.checks.map(\.id) == ["QC.BUILD.FIRST_PARTY_WARNINGS"])
+        #expect(result.evidence == nil)
+        #expect(result.verification == nil)
+    }
+
+    @Test("A concurrency-only diagnostic produces its dedicated FAIL")
+    func concurrencyDiagnosticProducesDedicatedFail() throws {
+        let initial = try context()
+        let result = XcodeBuildEvidenceExecution.execute(
+            initialContext: initial,
+            selection: selection,
+            runBuild: { _, _ in buildObservation(diagnostics: [
+                buildDiagnostic(sourcePath: "Sources/App.swift", isConcurrencyDiagnostic: true)
+            ]) },
+            observeFinalContext: { initial }
+        )
+
+        #expect(result.status == .fail)
+        #expect(result.report.checks.map(\.id) == ["QC.CONCURRENCY.DIAGNOSTICS"])
+        #expect(result.evidence == nil)
+        #expect(result.verification == nil)
+    }
+
     @Test("Input mutation after build blocks evidence")
     func changedInputBlocksEvidence() throws {
         let initial = try context()
@@ -224,3 +260,46 @@ private let observation = XcodeBuildSupervisionObservation(
         compilerSectionCount: 1
     )
 )
+
+private func buildObservation(
+    diagnostics: [XcodeBuildDiagnosticObservation]
+) -> XcodeBuildSupervisionObservation {
+    XcodeBuildSupervisionObservation(
+        selection: selection,
+        resultBundlePath: "/sandbox/cache/evidence/Build.xcresult",
+        evidence: XcodeBuildEvidenceObservation(
+            buildResultsSHA256: String(repeating: "c", count: 64),
+            buildLogSHA256: String(repeating: "d", count: 64),
+            actionTitle: "Build",
+            destination: XcodeBuildDestinationObservation(
+                deviceID: "device-id",
+                deviceName: "Mac",
+                architecture: "arm64",
+                modelName: "Mac",
+                platform: "macOS",
+                osVersion: "15.0",
+                osBuildNumber: nil
+            ),
+            startTime: 1,
+            endTime: 2,
+            warningCount: diagnostics.count,
+            analyzerWarningCount: 0,
+            compiledSourcePaths: ["Sources/App.swift"],
+            compilerSectionCount: 1,
+            diagnostics: diagnostics
+        )
+    )
+}
+
+private func buildDiagnostic(
+    sourcePath: String,
+    isConcurrencyDiagnostic: Bool = false
+) -> XcodeBuildDiagnosticObservation {
+    XcodeBuildDiagnosticObservation(
+        issueType: "warning",
+        targetName: "App",
+        sourcePath: sourcePath,
+        sourceIsExternal: false,
+        isConcurrencyDiagnostic: isConcurrencyDiagnostic
+    )
+}

@@ -10,7 +10,11 @@ struct XcodeBuildEvidenceVerificationTests {
             processResult: successfulProcess,
             buildResultsData: try buildResults(
                 warningCount: 1,
-                warnings: [issue(message: "Review this warning.")]
+                warnings: [issue(
+                    message: "Review this warning.",
+                    targetName: "App",
+                    sourceURL: "file:///repository/Sources/App.swift"
+                )]
             ),
             buildLogData: try buildLog(
                 command: "/usr/bin/swiftc -frontend -c /repository/Sources/App.swift"
@@ -24,8 +28,57 @@ struct XcodeBuildEvidenceVerificationTests {
         #expect(observation.analyzerWarningCount == 0)
         #expect(observation.compiledSourcePaths == ["Sources/App.swift"])
         #expect(observation.compilerSectionCount == 1)
+        #expect(observation.diagnostics.count == 1)
+        #expect(observation.diagnostics[0].targetName == "App")
+        #expect(observation.diagnostics[0].sourcePath == "Sources/App.swift")
+        #expect(!observation.diagnostics[0].sourceIsExternal)
         #expect(observation.buildResultsSHA256.count == 64)
         #expect(observation.buildLogSHA256.count == 64)
+    }
+
+    @Test("External diagnostic sources are retained only as an exclusion fact")
+    func excludesExternalDiagnosticSourcePath() throws {
+        let observation = try XcodeBuildEvidenceVerifier.verify(
+            processResult: successfulProcess,
+            buildResultsData: try buildResults(
+                warningCount: 1,
+                warnings: [issue(
+                    message: "Dependency warning.",
+                    targetName: "App",
+                    sourceURL: "file:///dependencies/Package/Sources/Dependency.swift"
+                )]
+            ),
+            buildLogData: try buildLog(
+                command: "/usr/bin/swiftc -frontend -c /repository/Sources/App.swift"
+            ),
+            repositoryRoot: repositoryRoot,
+            sourcePaths: ["Sources"]
+        )
+
+        #expect(observation.diagnostics[0].sourcePath == nil)
+        #expect(observation.diagnostics[0].sourceIsExternal)
+    }
+
+    @Test("A relative diagnostic source is rejected before attribution")
+    func rejectsRelativeDiagnosticSource() throws {
+        expectError(.invalidDiagnosticSource) {
+            try XcodeBuildEvidenceVerifier.verify(
+                processResult: successfulProcess,
+                buildResultsData: try buildResults(
+                    warningCount: 1,
+                    warnings: [issue(
+                        message: "Malformed warning.",
+                        targetName: "App",
+                        sourceURL: "Sources/App.swift"
+                    )]
+                ),
+                buildLogData: try buildLog(
+                    command: "/usr/bin/swiftc -frontend -c /repository/Sources/App.swift"
+                ),
+                repositoryRoot: repositoryRoot,
+                sourcePaths: ["Sources"]
+            )
+        }
     }
 
     @Test("A nonzero xcodebuild exit is rejected before result parsing")
@@ -169,8 +222,19 @@ struct XcodeBuildEvidenceVerificationTests {
         )
     }
 
-    private func issue(message: String) -> [String: Any] {
-        ["issueType": "warning", "message": message]
+    private func issue(
+        message: String,
+        targetName: String? = nil,
+        sourceURL: String? = nil
+    ) -> [String: Any] {
+        var value: [String: Any] = ["issueType": "warning", "message": message]
+        if let targetName {
+            value["targetName"] = targetName
+        }
+        if let sourceURL {
+            value["sourceURL"] = sourceURL
+        }
+        return value
     }
 
     private func expectError(

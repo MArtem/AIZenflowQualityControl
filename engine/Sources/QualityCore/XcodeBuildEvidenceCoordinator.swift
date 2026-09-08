@@ -93,11 +93,11 @@ package enum XcodeBuildEvidenceCoordinator {
         guard diagnostics.unattributedWarningCount == 0 else {
             throw XcodeBuildEvidenceCoordinationError.unattributedDiagnostics
         }
+        if diagnostics.hasOnlyConcurrencyDiagnostics {
+            throw XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics
+        }
         guard diagnostics.newFirstPartyWarningCount == 0 else {
             throw XcodeBuildEvidenceCoordinationError.firstPartyWarnings
-        }
-        guard diagnostics.concurrencyDiagnosticCount == 0 else {
-            throw XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics
         }
 
         let buildAction = context.executionAction
@@ -222,11 +222,11 @@ package enum XcodeBuildEvidenceCoordinator {
         if diagnostics.unattributedWarningCount > 0 {
             throw XcodeBuildEvidenceCoordinationError.unattributedDiagnostics
         }
+        if diagnostics.hasOnlyConcurrencyDiagnostics {
+            throw XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics
+        }
         if diagnostics.newFirstPartyWarningCount > 0 {
             throw XcodeBuildEvidenceCoordinationError.firstPartyWarnings
-        }
-        if diagnostics.concurrencyDiagnosticCount > 0 {
-            throw XcodeBuildEvidenceCoordinationError.concurrencyDiagnostics
         }
         guard verification.verdict == .ready else {
             throw XcodeBuildEvidenceCoordinationError.verificationFailed
@@ -412,6 +412,11 @@ package enum XcodeBuildEvidenceCoordinator {
         let concurrencyDiagnosticCount: Int
         let dependencyOrGeneratedWarningCount: Int
         let unattributedWarningCount: Int
+
+        var hasOnlyConcurrencyDiagnostics: Bool {
+            newFirstPartyWarningCount > 0
+                && newFirstPartyWarningCount == concurrencyDiagnosticCount
+        }
 
         var warningsMessage: String {
             if unattributedWarningCount > 0 {

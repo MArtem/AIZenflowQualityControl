@@ -95,6 +95,49 @@ struct XcodeBuildEvidenceCoordinatorTests {
         #expect(base.evidence.artifacts[0].sha256 != changedResults.evidence.artifacts[0].sha256)
     }
 
+    @Test("An authenticated first-party warning blocks READY evidence")
+    func firstPartyWarningBlocksEvidence() throws {
+        expectError(.firstPartyWarnings) {
+            try coordinate(observation: observation(diagnostics: [
+                diagnostic(targetName: "App", sourcePath: "Sources/App.swift")
+            ]))
+        }
+    }
+
+    @Test("A concurrency-only diagnostic uses the dedicated terminal outcome")
+    func concurrencyDiagnosticHasDedicatedOutcome() throws {
+        expectError(.concurrencyDiagnostics) {
+            try coordinate(observation: observation(diagnostics: [
+                diagnostic(
+                    targetName: "App",
+                    sourcePath: "Sources/App.swift",
+                    isConcurrencyDiagnostic: true
+                )
+            ]))
+        }
+    }
+
+    @Test("External, non-selected, and generated diagnostics stay outside the first-party claim")
+    func excludesNonFirstPartyDiagnostics() throws {
+        let receipt = try coordinate(observation: observation(diagnostics: [
+            diagnostic(targetName: "App", sourcePath: nil, sourceIsExternal: true),
+            diagnostic(targetName: "Dependency", sourcePath: "Sources/App.swift"),
+            diagnostic(targetName: "App", sourcePath: "Generated/Notice.swift")
+        ]))
+
+        #expect(receipt.verification.verdict == .ready)
+        #expect(receipt.evidence.gates.map(\.status).allSatisfy { $0 == .pass })
+    }
+
+    @Test("A selected-target diagnostic outside compiler membership is blocked")
+    func unattributedDiagnosticBlocksEvidence() throws {
+        expectError(.unattributedDiagnostics) {
+            try coordinate(observation: observation(diagnostics: [
+                diagnostic(targetName: "App", sourcePath: "Sources/NotCompiled.swift")
+            ]))
+        }
+    }
+
     private func coordinate(
         observation suppliedObservation: XcodeBuildSupervisionObservation? = nil,
         profileSnapshot: ProfileSnapshot? = nil,
@@ -128,7 +171,8 @@ struct XcodeBuildEvidenceCoordinatorTests {
 
     private func observation(
         configuration: String = "Debug",
-        buildResultsSHA256: String = buildResultsHash
+        buildResultsSHA256: String = buildResultsHash,
+        diagnostics: [XcodeBuildDiagnosticObservation] = []
     ) -> XcodeBuildSupervisionObservation {
         XcodeBuildSupervisionObservation(
             selection: XcodeBuildSelection(
@@ -152,11 +196,27 @@ struct XcodeBuildEvidenceCoordinatorTests {
                 ),
                 startTime: 1,
                 endTime: 2,
-                warningCount: 0,
+                warningCount: diagnostics.count,
                 analyzerWarningCount: 0,
                 compiledSourcePaths: ["Sources/App.swift"],
-                compilerSectionCount: 1
+                compilerSectionCount: 1,
+                diagnostics: diagnostics
             )
+        )
+    }
+
+    private func diagnostic(
+        targetName: String?,
+        sourcePath: String?,
+        sourceIsExternal: Bool = false,
+        isConcurrencyDiagnostic: Bool = false
+    ) -> XcodeBuildDiagnosticObservation {
+        XcodeBuildDiagnosticObservation(
+            issueType: "warning",
+            targetName: targetName,
+            sourcePath: sourcePath,
+            sourceIsExternal: sourceIsExternal,
+            isConcurrencyDiagnostic: isConcurrencyDiagnostic
         )
     }
 
