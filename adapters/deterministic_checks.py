@@ -2177,6 +2177,7 @@ def main() -> int:
     parser.add_argument("--test-path", action="append", default=[])
     arguments = parser.parse_args()
     root = Path(arguments.repository_root).resolve()
+    revision = ""
     try:
         if not root.is_dir():
             raise AdapterError("repository root must be a directory")
@@ -2462,7 +2463,7 @@ def main() -> int:
             return 0
         raise AdapterError(f"no executable adapter is registered for {arguments.check}")
     except AdapterError as error:
-        result = report(arguments.check, "", "BLOCKED", str(error))
+        result = report(arguments.check, revision, "BLOCKED", str(error))
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 2
 
