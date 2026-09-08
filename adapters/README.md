@@ -130,6 +130,16 @@ profile; no changed path is `PASS` only for that narrow change-detection claim. 
 validate signing identities, provisioning, entitlements semantics, target membership, or App Store
 acceptance, and it never mutates the checkout.
 
+`QC.BUILD.MEMBERSHIP` is emitted only by the authenticated `build-evidence` boundary. It keeps
+the profile's explicit `declaredSourcePaths` separate from the compiler log's
+`compiledSourcePaths`, and records the selected scheme, target(s), configuration, destination,
+compiler-section count, and external source-looking input count. A successful receipt therefore
+means “these in-repository inputs were observed in this bounded build”; it does not mean every
+tracked Swift file shipped. Generated ownership is a separate check, extension membership comes
+from observed compiler inputs rather than names, and external package inputs are counted outside
+the first-party list. Empty, unavailable, unresolved, malformed, oversized, symlink-escaping, or
+outside-scope membership is `BLOCKED` and cannot become a normal `PASS`.
+
 ```sh
 python3 adapters/deterministic_checks.py \
   --repository-root <repository> \

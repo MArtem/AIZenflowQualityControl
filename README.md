@@ -48,6 +48,13 @@ without evidence; missing authority, unstable inputs, unsupported Git index stat
 failure, or verification failure emits evidence-free `BLOCKED`. This boundary does not run tests,
 UI/device checks, review, archive, signing, upload, or release operations.
 
+Its `sourceMembership` receipt keeps the explicit profile source scopes separate from the
+authenticated compiler inputs for the selected scheme, target(s), configuration, and destination.
+Generated ownership is a separate claim; external package source-looking inputs are counted outside
+the first-party list; empty, unresolved, malformed, oversized, or path-escaping membership stays
+evidence-free `BLOCKED`. A tracked Swift file is therefore not called shipped merely because it is
+present in Git.
+
 The catalog-backed deterministic adapters now include `QC.FORMAT.SWIFTFORMAT`,
 `QC.PRIVACY.MANIFEST`, and `QC.CONFIGURATION.SIGNING` in addition to the tracked-secret, TODO
 ownership, generated ownership, dependency lock, localization, and resource checks. SwiftFormat

@@ -84,6 +84,8 @@ public struct XcodeConfiguration: Codable, Sendable {
 }
 
 public struct SourceMembership: Codable, Sendable {
+    /// Declares who may provide compiled membership; it does not turn `sourcePaths` into a
+    /// shipped-file list. The authenticated build receipt carries that independent observation.
     public enum Authority: String, Codable, Sendable {
         case xcodeBuildGraph = "xcode-build-graph"
     }

@@ -76,6 +76,12 @@ package enum XcodeBuildEvidenceCoordinator {
         }
         try validate(context: context, selection: observation.selection)
         let profile = context.profileSnapshot.profile
+        guard let sourceMembership = makeSourceMembership(
+            observation: observation,
+            profile: profile
+        ) else {
+            throw XcodeBuildEvidenceCoordinationError.invalidTrustedContext
+        }
 
         let buildAction = context.executionAction
         let artifacts = [
@@ -105,6 +111,17 @@ package enum XcodeBuildEvidenceCoordinator {
             commandID: command.id,
             actions: [buildAction]
         )
+        let membershipGate = EvidenceGate(
+            id: "QC.BUILD.MEMBERSHIP",
+            status: .pass,
+            message: "Authenticated Xcode compiler membership covers "
+                + String(sourceMembership.compiledSourcePaths.count)
+                + " in-repository source file(s) for the declared target/configuration; "
+                + String(sourceMembership.externalSourceInputCount)
+                + " external source input(s) remain outside the first-party claim.",
+            commandID: command.id,
+            actions: [buildAction]
+        )
         let evidence = QualityEvidence(
             sourceRepository: context.sourceRepository,
             sourceRevision: context.sourceRevision,
@@ -115,7 +132,8 @@ package enum XcodeBuildEvidenceCoordinator {
             toolchain: context.toolchain,
             permissions: profile.permissions,
             commands: [command],
-            gates: [gate],
+            gates: [gate, membershipGate],
+            sourceMembership: sourceMembership,
             artifacts: artifacts,
             claimedVerdict: .ready
         )
@@ -141,6 +159,12 @@ package enum XcodeBuildEvidenceCoordinator {
                     actions: [buildAction],
                     status: gate.status,
                     message: gate.message
+                ),
+                membershipGate.id: EvidenceGateExpectation(
+                    commandID: membershipGate.commandID,
+                    actions: [buildAction],
+                    status: membershipGate.status,
+                    message: membershipGate.message
                 )
             ],
             userAuthorizedActions: [buildAction],
@@ -200,6 +224,12 @@ package enum XcodeBuildEvidenceCoordinator {
         context: XcodeBuildEvidenceObservedContext
     ) -> String {
         let selection = observation.selection
+        let profile = context.profileSnapshot.profile
+        let declaredTargets = profile.xcode?.schemes.first(where: {
+            $0.name == selection.scheme
+                && $0.configurations.contains(selection.configuration)
+                && $0.destinations.contains(selection.destination)
+        })?.targets.sorted(by: bytewiseLessThan) ?? []
         let commandFields = [
             "aizenflow-quality/xcode-build-evidence-command/v1",
             context.sourceRepository,
@@ -214,6 +244,11 @@ package enum XcodeBuildEvidenceCoordinator {
             selection.scheme,
             selection.configuration,
             selection.destination,
+            declaredTargets.joined(separator: "\n"),
+            profile.sourcePaths.sorted(by: bytewiseLessThan).joined(separator: "\n"),
+            observation.evidence.compiledSourcePaths.joined(separator: "\n"),
+            String(observation.evidence.compilerSectionCount),
+            String(observation.evidence.externalSourceInputCount),
             context.executionAction.rawValue,
             String(buildTimeoutSeconds)
         ]
@@ -248,6 +283,12 @@ package enum XcodeBuildEvidenceCoordinator {
             && EvidenceVerifier.isBoundedNonEmptyString(observation.selection.scheme)
             && EvidenceVerifier.isBoundedNonEmptyString(observation.selection.configuration)
             && EvidenceVerifier.isBoundedNonEmptyString(observation.selection.destination)
+            && !observation.evidence.compiledSourcePaths.isEmpty
+            && (1...100_000).contains(observation.evidence.compilerSectionCount)
+            && (0...100_000).contains(observation.evidence.externalSourceInputCount)
+            && observation.evidence.compiledSourcePaths == observation.evidence.compiledSourcePaths.sorted(by: bytewiseLessThan)
+            && Set(observation.evidence.compiledSourcePaths).count == observation.evidence.compiledSourcePaths.count
+            && observation.evidence.compiledSourcePaths.allSatisfy(isSafeRelativePath)
     }
 
     private static func selectionIsDeclared(
@@ -259,6 +300,42 @@ package enum XcodeBuildEvidenceCoordinator {
                 && scheme.configurations.contains(selection.configuration)
                 && scheme.destinations.contains(selection.destination)
         }) == true
+    }
+
+    private static func makeSourceMembership(
+        observation: XcodeBuildSupervisionObservation,
+        profile: ProjectProfile
+    ) -> SourceMembershipEvidence? {
+        guard let scheme = profile.xcode?.schemes.first(where: {
+            $0.name == observation.selection.scheme
+                && $0.configurations.contains(observation.selection.configuration)
+                && $0.destinations.contains(observation.selection.destination)
+        }) else {
+            return nil
+        }
+        return SourceMembershipEvidence(
+            authority: .xcodeBuildGraph,
+            status: .verified,
+            scheme: scheme.name,
+            targets: scheme.targets.sorted(by: bytewiseLessThan),
+            configuration: observation.selection.configuration,
+            destination: observation.selection.destination,
+            declaredSourcePaths: profile.sourcePaths.sorted(by: bytewiseLessThan),
+            compiledSourcePaths: observation.evidence.compiledSourcePaths,
+            compilerSectionCount: observation.evidence.compilerSectionCount,
+            externalSourceInputCount: observation.evidence.externalSourceInputCount,
+            claims: SourceMembershipClaim.allCases
+        )
+    }
+
+    private static func isSafeRelativePath(_ value: String) -> Bool {
+        return !value.hasPrefix("/")
+            && !value.contains("\\")
+            && !value.split(separator: "/").contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+    }
+
+    private static func bytewiseLessThan(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
     }
 
     private static func isLowercaseHex(_ value: String, count: Int) -> Bool {
@@ -317,6 +394,11 @@ public struct XcodeBuildEvidenceExecutionResult: Encodable, Sendable {
                     id: "QC.BUILD",
                     status: .pass,
                     message: "The supervised Xcode build produced verified exact-input evidence."
+                ),
+                QualityCheck(
+                    id: "QC.BUILD.MEMBERSHIP",
+                    status: .pass,
+                    message: "The build receipt contains verified explicit-scope and compiler-membership evidence."
                 )
             ]
         )
@@ -401,6 +483,12 @@ package enum XcodeBuildEvidenceExecution {
                 return failed(
                     "QC.BUILD_EVIDENCE.BUILD_FAILED",
                     "The supervised Xcode build result was unsuccessful."
+                )
+            }
+            if case .verification(.sourceMembership(_)) = error {
+                return blocked(
+                    "QC.BUILD.MEMBERSHIP.BLOCKED",
+                    "Authenticated compiler membership was empty, unavailable, unresolved, malformed, oversized, or outside the declared source boundary."
                 )
             }
             return blocked(

@@ -31,11 +31,11 @@
     },
     {
       "id": "QC.BUILD.MEMBERSHIP",
-      "scope": "Compiler source membership in the authoritative Xcode build graph",
+      "scope": "Authenticated compiler membership for the declared Xcode target/configuration and explicit source scopes",
       "severity": "block",
       "applicability": "profile",
-      "remediation": "Make every compiled first-party source traceable to the declared Xcode graph.",
-      "fixture": { "positive": "fixtures/README.md", "negative": "fixtures/README.md" },
+      "remediation": "Provide stable build-log evidence for the declared target/configuration; unresolved, empty, outside-scope, or path-unsafe membership remains BLOCKED.",
+      "fixture": { "positive": "fixtures/build-membership/README.md", "negative": "fixtures/build-membership/README.md" },
       "implementation": "implemented"
     },
     {

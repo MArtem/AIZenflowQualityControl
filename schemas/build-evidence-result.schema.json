@@ -20,13 +20,19 @@
         "report": {
           "allOf": [
             { "properties": { "status": { "const": "PASS" } } },
-            { "properties": { "checks": { "items": { "properties": { "status": { "const": "PASS" } } } } } }
+            { "properties": { "checks": { "items": { "properties": { "status": { "const": "PASS" } } } } } },
+            { "properties": { "checks": {
+              "contains": { "properties": { "id": { "const": "QC.BUILD.MEMBERSHIP" } }, "required": ["id"] },
+              "minContains": 1,
+              "maxContains": 1
+            } } }
           ]
         },
         "evidence": {
           "allOf": [
             { "$ref": "quality-evidence.schema.json" },
             {
+              "required": ["sourceMembership"],
               "properties": {
                 "profileSchemaVersion": { "const": 2 },
                 "claimedVerdict": { "const": "READY" },
@@ -51,11 +57,11 @@
                   }
                 },
                 "gates": {
-                  "minItems": 1,
-                  "maxItems": 1,
+                  "minItems": 2,
+                  "maxItems": 2,
                   "items": {
                     "properties": {
-                      "id": { "const": "QC.BUILD" },
+                      "id": { "enum": ["QC.BUILD", "QC.BUILD.MEMBERSHIP"] },
                       "status": { "const": "PASS" },
                       "commandID": { "const": "xcode-build" },
                       "actions": {
@@ -65,7 +71,28 @@
                         ]
                       }
                     }
-                  }
+                  },
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": { "id": { "const": "QC.BUILD" } },
+                        "required": ["id"]
+                      },
+                      "minContains": 1,
+                      "maxContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": { "id": { "const": "QC.BUILD.MEMBERSHIP" } },
+                        "required": ["id"]
+                      },
+                      "minContains": 1,
+                      "maxContains": 1
+                    }
+                  ]
+                },
+                "sourceMembership": {
+                  "$ref": "quality-evidence.schema.json#/$defs/sourceMembership"
                 },
                 "artifacts": {
                   "minItems": 2,

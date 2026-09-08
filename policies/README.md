@@ -59,3 +59,10 @@ repository-neutral shipped-source gates. The first blocks only high-confidence s
 blocking media/file operations; the second blocks known Swift concurrency escape hatches. Both
 operate on clean Git `HEAD`, exclude tests/fixtures/documentation, fail closed on malformed or
 oversized input, and provide no suppression mechanism.
+
+`QC.BUILD.MEMBERSHIP` is a build-evidence gate rather than a filename scan. Its receipt carries the
+profile's explicit source scope separately from the authenticated Xcode compiler inputs for one
+declared scheme/target/configuration/destination. Generated ownership remains a separate claim;
+extension inputs are included only when observed; external package source-looking inputs are
+counted but excluded from the first-party list. Empty, unresolved, outside-scope, symlink-escaping,
+malformed, or unavailable membership is `BLOCKED`, never an empty successful scan.

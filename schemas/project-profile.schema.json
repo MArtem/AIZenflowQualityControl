@@ -139,6 +139,7 @@
           "type": "array"
         },
         "sourceMembership": {
+          "description": "Declares the authority for compiled membership. The profile sourcePaths remain explicit scan scopes; a build receipt must carry separate authenticated compiler membership before making a compiled-input claim.",
           "additionalProperties": false,
           "properties": {
             "authority": { "const": "xcode-build-graph" }

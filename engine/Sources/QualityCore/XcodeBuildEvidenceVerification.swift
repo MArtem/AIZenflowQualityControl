@@ -24,6 +24,33 @@ package struct XcodeBuildEvidenceObservation: Equatable, Sendable {
     package let analyzerWarningCount: Int
     package let compiledSourcePaths: [String]
     package let compilerSectionCount: Int
+    package let externalSourceInputCount: Int
+
+    package init(
+        buildResultsSHA256: String,
+        buildLogSHA256: String,
+        actionTitle: String,
+        destination: XcodeBuildDestinationObservation,
+        startTime: Double,
+        endTime: Double,
+        warningCount: Int,
+        analyzerWarningCount: Int,
+        compiledSourcePaths: [String],
+        compilerSectionCount: Int,
+        externalSourceInputCount: Int = 0
+    ) {
+        self.buildResultsSHA256 = buildResultsSHA256
+        self.buildLogSHA256 = buildLogSHA256
+        self.actionTitle = actionTitle
+        self.destination = destination
+        self.startTime = startTime
+        self.endTime = endTime
+        self.warningCount = warningCount
+        self.analyzerWarningCount = analyzerWarningCount
+        self.compiledSourcePaths = compiledSourcePaths
+        self.compilerSectionCount = compilerSectionCount
+        self.externalSourceInputCount = externalSourceInputCount
+    }
 }
 
 package enum XcodeBuildEvidenceVerificationError: Error, Equatable {
@@ -151,7 +178,8 @@ package enum XcodeBuildEvidenceVerifier {
             analyzerWarningCount: result.analyzerWarningCount
                 ?? result.analyzerWarnings.count,
             compiledSourcePaths: membership.compiledSourcePaths,
-            compilerSectionCount: membership.compilerSectionCount
+            compilerSectionCount: membership.compilerSectionCount,
+            externalSourceInputCount: membership.externalSourceInputCount
         )
     }
 

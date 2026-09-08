@@ -7,6 +7,10 @@ package struct XcodeBuildLogMembershipObservation: Equatable, Sendable {
     package let buildLogSHA256: String
     package let compiledSourcePaths: [String]
     package let compilerSectionCount: Int
+    /// Source-looking compiler inputs outside the repository root (for example SwiftPM sources).
+    /// Their paths are intentionally not retained in evidence; the count prevents the receipt
+    /// from implying that the first-party list covers external inputs.
+    package let externalSourceInputCount: Int
 }
 
 package enum XcodeBuildLogMembershipError: Error, Equatable {
@@ -73,6 +77,7 @@ package enum XcodeBuildLogMembershipExtractor {
         var commandByteCount = 0
         var repositoryInputs = Set<String>()
         var compiledSources = Set<String>()
+        var externalSourceInputs = Set<String>()
         var compilerSectionCount = 0
 
         while let section = sections.popLast() {
@@ -102,25 +107,29 @@ package enum XcodeBuildLogMembershipExtractor {
                         word,
                         canonicalRoot: canonicalRoot,
                         to: &sectionInputs,
+                        externalInputs: &externalSourceInputs,
                         rejectsRelativeSource: compilerCommandKind == .raw
                     )
                 }
                 try appendLocation(
                     section.location,
                     canonicalRoot: canonicalRoot,
-                    to: &sectionInputs
+                    to: &sectionInputs,
+                    externalInputs: &externalSourceInputs
                 )
                 for message in section.messages {
                     try appendLocation(
                         message.location,
                         canonicalRoot: canonicalRoot,
-                        to: &sectionInputs
+                        to: &sectionInputs,
+                        externalInputs: &externalSourceInputs
                     )
                     for annotation in message.annotations {
                         try appendLocation(
                             annotation.location,
                             canonicalRoot: canonicalRoot,
-                            to: &sectionInputs
+                            to: &sectionInputs,
+                            externalInputs: &externalSourceInputs
                         )
                     }
                 }
@@ -129,6 +138,9 @@ package enum XcodeBuildLogMembershipExtractor {
             compiledSources.formUnion(sectionInputs)
             repositoryInputs.formUnion(sectionInputs)
             guard repositoryInputs.count <= maximumRepositoryInputs else {
+                throw XcodeBuildLogMembershipError.collectionLimitExceeded
+            }
+            guard externalSourceInputs.count <= maximumRepositoryInputs else {
                 throw XcodeBuildLogMembershipError.collectionLimitExceeded
             }
         }
@@ -161,14 +173,16 @@ package enum XcodeBuildLogMembershipExtractor {
                 String(format: "%02x", $0)
             }.joined(),
             compiledSourcePaths: compiledSources.sorted(by: bytewiseLessThan),
-            compilerSectionCount: compilerSectionCount
+            compilerSectionCount: compilerSectionCount,
+            externalSourceInputCount: externalSourceInputs.count
         )
     }
 
     private static func appendLocation(
         _ location: BuildLogLocation?,
         canonicalRoot: URL,
-        to paths: inout Set<String>
+        to paths: inout Set<String>,
+        externalInputs: inout Set<String>
     ) throws {
         guard let rawURL = location?.url else {
             return
@@ -181,13 +195,15 @@ package enum XcodeBuildLogMembershipExtractor {
         } else {
             candidate = nil
         }
-        if let candidate,
-           let relativePath = try repositoryRelativePath(
-               candidate,
-               canonicalRoot: canonicalRoot
-           ),
-           isCompiledSource(relativePath) {
-            paths.insert(relativePath)
+        if let candidate {
+            if let relativePath = try repositoryRelativePath(
+                candidate,
+                canonicalRoot: canonicalRoot
+            ), isCompiledSource(relativePath) {
+                paths.insert(relativePath)
+            } else if isCompiledSource(candidate.path) {
+                externalInputs.insert(candidate.standardizedFileURL.path)
+            }
         }
     }
 
@@ -195,6 +211,7 @@ package enum XcodeBuildLogMembershipExtractor {
         _ word: String,
         canonicalRoot: URL,
         to paths: inout Set<String>,
+        externalInputs: inout Set<String>,
         rejectsRelativeSource: Bool
     ) throws {
         var candidates = [word]
@@ -213,6 +230,11 @@ package enum XcodeBuildLogMembershipExtractor {
                 if rejectsRelativeSource && !rawCandidate.hasPrefix("/") {
                     throw XcodeBuildLogMembershipError.unresolvedCompilerInputPath
                 }
+                if rawCandidate.hasPrefix("/") {
+                    externalInputs.insert(
+                        URL(fileURLWithPath: rawCandidate).standardizedFileURL.path
+                    )
+                }
                 continue
             }
             var path = String(rawCandidate[rootRange.lowerBound...])
@@ -225,6 +247,8 @@ package enum XcodeBuildLogMembershipExtractor {
                 canonicalRoot: canonicalRoot
             ) {
                 paths.insert(relativePath)
+            } else {
+                externalInputs.insert(URL(fileURLWithPath: path).standardizedFileURL.path)
             }
         }
     }

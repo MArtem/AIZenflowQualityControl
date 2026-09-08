@@ -46,6 +46,9 @@ private func rejectNullEvidenceValue<Key: CodingKey>(
 private enum EvidenceValidationLimits {
     static let maximumCollectionItems = 64
     static let maximumStringScalars = 1_024
+    static let maximumSourcePaths = 256
+    static let maximumMembershipPaths = 100_000
+    static let maximumMembershipSections = 100_000
 }
 
 public enum PermissionAction: String, Codable, CaseIterable, Sendable {
@@ -312,6 +315,102 @@ public struct EvidenceArtifact: Codable, Sendable {
     }
 }
 
+/// Structured provenance for the source-membership part of one authenticated Xcode build.
+///
+/// `declaredSourcePaths` is the caller/profile scope. `compiledSourcePaths` is the independent
+/// set recovered from the authenticated compiler log. The two sets are deliberately retained as
+/// separate claims so tracked files, explicit scan scope, and shipped/compiled membership cannot
+/// be conflated by a consumer.
+public enum SourceMembershipClaim: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
+    case explicitProfileScopes = "explicit-profile-scopes"
+    case authenticatedCompiledInputs = "authenticated-compiled-inputs"
+    case generatedOwnershipSeparate = "generated-ownership-separate"
+    case externalPackageInputsCounted = "external-package-inputs-counted"
+    case extensionInputsIncluded = "extension-inputs-included"
+    case pathBoundaryEnforced = "path-boundary-enforced"
+}
+
+public struct SourceMembershipEvidence: Codable, Equatable, Sendable {
+    public enum Authority: String, Codable, Equatable, Sendable {
+        case xcodeBuildGraph = "xcode-build-graph"
+    }
+
+    public enum Status: String, Codable, Equatable, Sendable {
+        case verified
+    }
+
+    public let authority: Authority
+    public let status: Status
+    public let scheme: String
+    public let targets: [String]
+    public let configuration: String
+    public let destination: String
+    public let declaredSourcePaths: [String]
+    public let compiledSourcePaths: [String]
+    public let compilerSectionCount: Int
+    public let externalSourceInputCount: Int
+    public let claims: [SourceMembershipClaim]
+
+    public init(
+        authority: Authority,
+        status: Status,
+        scheme: String,
+        targets: [String],
+        configuration: String,
+        destination: String,
+        declaredSourcePaths: [String],
+        compiledSourcePaths: [String],
+        compilerSectionCount: Int,
+        externalSourceInputCount: Int,
+        claims: [SourceMembershipClaim]
+    ) {
+        self.authority = authority
+        self.status = status
+        self.scheme = scheme
+        self.targets = targets
+        self.configuration = configuration
+        self.destination = destination
+        self.declaredSourcePaths = declaredSourcePaths
+        self.compiledSourcePaths = compiledSourcePaths
+        self.compilerSectionCount = compilerSectionCount
+        self.externalSourceInputCount = externalSourceInputCount
+        self.claims = claims
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case authority
+        case status
+        case scheme
+        case targets
+        case configuration
+        case destination
+        case declaredSourcePaths
+        case compiledSourcePaths
+        case compilerSectionCount
+        case externalSourceInputCount
+        case claims
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownEvidenceKeys(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue))
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        authority = try container.decode(Authority.self, forKey: .authority)
+        status = try container.decode(Status.self, forKey: .status)
+        scheme = try container.decode(String.self, forKey: .scheme)
+        targets = try container.decode([String].self, forKey: .targets)
+        configuration = try container.decode(String.self, forKey: .configuration)
+        destination = try container.decode(String.self, forKey: .destination)
+        declaredSourcePaths = try container.decode([String].self, forKey: .declaredSourcePaths)
+        compiledSourcePaths = try container.decode([String].self, forKey: .compiledSourcePaths)
+        compilerSectionCount = try container.decode(Int.self, forKey: .compilerSectionCount)
+        externalSourceInputCount = try container.decode(Int.self, forKey: .externalSourceInputCount)
+        claims = try container.decode([SourceMembershipClaim].self, forKey: .claims)
+    }
+}
+
 public struct QualityEvidence: Encodable, Sendable {
     public let schemaVersion: Int
     public let sourceRepository: String
@@ -324,6 +423,7 @@ public struct QualityEvidence: Encodable, Sendable {
     public let permissions: PermissionPolicy
     public let commands: [EvidenceCommand]
     public let gates: [EvidenceGate]
+    public let sourceMembership: SourceMembershipEvidence?
     public let testCounts: EvidenceTestCounts?
     public let reviewRevision: String?
     public let artifacts: [EvidenceArtifact]
@@ -342,6 +442,7 @@ public struct QualityEvidence: Encodable, Sendable {
         permissions: PermissionPolicy,
         commands: [EvidenceCommand],
         gates: [EvidenceGate],
+        sourceMembership: SourceMembershipEvidence? = nil,
         testCounts: EvidenceTestCounts? = nil,
         reviewRevision: String? = nil,
         artifacts: [EvidenceArtifact] = [],
@@ -359,6 +460,7 @@ public struct QualityEvidence: Encodable, Sendable {
         self.permissions = permissions
         self.commands = commands
         self.gates = gates
+        self.sourceMembership = sourceMembership
         self.testCounts = testCounts
         self.reviewRevision = reviewRevision
         self.artifacts = artifacts
@@ -378,11 +480,33 @@ public struct QualityEvidence: Encodable, Sendable {
         case permissions
         case commands
         case gates
+        case sourceMembership
         case testCounts
         case reviewRevision
         case artifacts
         case residualRisks
         case claimedVerdict
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(sourceRepository, forKey: .sourceRepository)
+        try container.encode(sourceRevision, forKey: .sourceRevision)
+        try container.encode(engineVersion, forKey: .engineVersion)
+        try container.encode(engineRevision, forKey: .engineRevision)
+        try container.encode(profileSchemaVersion, forKey: .profileSchemaVersion)
+        try container.encode(profileSHA256, forKey: .profileSHA256)
+        try container.encode(toolchain, forKey: .toolchain)
+        try container.encode(permissions, forKey: .permissions)
+        try container.encode(commands, forKey: .commands)
+        try container.encode(gates, forKey: .gates)
+        try container.encodeIfPresent(sourceMembership, forKey: .sourceMembership)
+        try container.encodeIfPresent(testCounts, forKey: .testCounts)
+        try container.encodeIfPresent(reviewRevision, forKey: .reviewRevision)
+        try container.encode(artifacts, forKey: .artifacts)
+        try container.encode(residualRisks, forKey: .residualRisks)
+        try container.encode(claimedVerdict, forKey: .claimedVerdict)
     }
 
 }
@@ -454,6 +578,7 @@ private struct EvidenceDocument: Decodable {
     let permissions: PermissionPolicy
     let commands: [EvidenceCommand]
     let gates: [EvidenceGate]
+    let sourceMembership: SourceMembershipEvidence?
     let testCounts: EvidenceTestCounts?
     let reviewRevision: String?
     let artifacts: [EvidenceArtifact]
@@ -472,6 +597,7 @@ private struct EvidenceDocument: Decodable {
         case permissions
         case commands
         case gates
+        case sourceMembership
         case testCounts
         case reviewRevision
         case artifacts
@@ -496,6 +622,12 @@ private struct EvidenceDocument: Decodable {
         permissions = try container.decode(StrictEvidencePermissionPolicy.self, forKey: .permissions).policy
         commands = try container.decode([EvidenceCommand].self, forKey: .commands)
         gates = try container.decode([EvidenceGate].self, forKey: .gates)
+        if container.contains(.sourceMembership) {
+            try rejectNullEvidenceValue(in: container, forKey: .sourceMembership)
+            sourceMembership = try container.decode(SourceMembershipEvidence.self, forKey: .sourceMembership)
+        } else {
+            sourceMembership = nil
+        }
         if container.contains(.testCounts) {
             try rejectNullEvidenceValue(in: container, forKey: .testCounts)
             testCounts = try container.decode(EvidenceTestCounts.self, forKey: .testCounts)
@@ -526,6 +658,7 @@ private struct EvidenceDocument: Decodable {
             permissions: permissions,
             commands: commands,
             gates: gates,
+            sourceMembership: sourceMembership,
             testCounts: testCounts,
             reviewRevision: reviewRevision,
             artifacts: artifacts,
@@ -1142,6 +1275,19 @@ public enum EvidenceVerifier {
                 )
             )
         }
+        let sourceMemberships = evidences.compactMap(\.sourceMembership)
+        guard sourceMemberships.count <= 1 else {
+            return EvidenceAggregationResult(
+                evidence: nil,
+                verification: EvidenceVerification(
+                    verdict: .bypassed,
+                    issues: [EvidenceVerificationIssue(
+                        code: "QC.EVIDENCE.AGGREGATION_SOURCE_MEMBERSHIP",
+                        message: "At most one aggregated input may carry source-membership evidence."
+                    )]
+                )
+            )
+        }
 
         let commands = evidences.flatMap(\.commands)
         let gates = evidences.flatMap(\.gates)
@@ -1163,6 +1309,7 @@ public enum EvidenceVerifier {
             permissions: first.permissions,
             commands: commands,
             gates: gates,
+            sourceMembership: sourceMemberships.first,
             testCounts: testCounts.first,
             reviewRevision: reviewRevisions.first,
             artifacts: artifacts,
@@ -1466,6 +1613,43 @@ public enum EvidenceVerifier {
             return false
         }
 
+        if let membership = evidence.sourceMembership {
+            let membershipCollectionsAreBounded = membership.targets.count <= EvidenceValidationLimits.maximumCollectionItems
+                && membership.declaredSourcePaths.count <= EvidenceValidationLimits.maximumSourcePaths
+                && membership.compiledSourcePaths.count <= EvidenceValidationLimits.maximumMembershipPaths
+                && !membership.targets.isEmpty
+                && !membership.declaredSourcePaths.isEmpty
+                && membership.claims.count == SourceMembershipClaim.allCases.count
+                && Set(membership.claims).count == membership.claims.count
+                && !membership.compiledSourcePaths.isEmpty
+                && (1...EvidenceValidationLimits.maximumMembershipSections).contains(membership.compilerSectionCount)
+                && (0...EvidenceValidationLimits.maximumMembershipPaths).contains(membership.externalSourceInputCount)
+            require(
+                membershipCollectionsAreBounded,
+                "QC.EVIDENCE.SOURCE_MEMBERSHIP_CONTRACT",
+                &issues
+            )
+
+            let membershipStringsAreBounded = [
+                membership.scheme,
+                membership.configuration,
+                membership.destination
+            ].allSatisfy(isBoundedNonEmptyString)
+                && membership.targets.allSatisfy(isBoundedNonEmptyString)
+                && membership.declaredSourcePaths.allSatisfy(isSafeRelativePath)
+                && membership.compiledSourcePaths.allSatisfy(isSafeRelativePath)
+                && membership.declaredSourcePaths.allSatisfy(isBoundedNonEmptyString)
+                && membership.compiledSourcePaths.allSatisfy(isBoundedNonEmptyString)
+                && membership.declaredSourcePaths == membership.declaredSourcePaths.sorted(by: bytewiseLessThan)
+                && membership.compiledSourcePaths == membership.compiledSourcePaths.sorted(by: bytewiseLessThan)
+                && membership.claims == SourceMembershipClaim.allCases
+            require(
+                membershipStringsAreBounded,
+                "QC.EVIDENCE.SOURCE_MEMBERSHIP_CONTRACT",
+                &issues
+            )
+        }
+
         let stringsAreBounded = [
             evidence.sourceRepository,
             evidence.engineVersion,
@@ -1574,6 +1758,10 @@ public enum EvidenceVerifier {
         return path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
             !$0.isEmpty && $0 != "." && $0 != ".."
         }
+    }
+
+    private static func bytewiseLessThan(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
     }
 
     package static func isBoundedNonEmptyString(_ value: String) -> Bool {

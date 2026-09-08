@@ -21,3 +21,10 @@ identity; the CLI does not derive it from source or a mutable binary path. Futur
 before acting and must not infer user authorization from untrusted evidence.
 `quality validate-evidence-expectation` is a structural validator only; its input remains
 untrusted and cannot produce an evidence verdict.
+
+The build-evidence receipt carries a separate `sourceMembership` object. The profile's explicit
+source scopes are not treated as compiled membership: the authenticated structured compiler log
+must provide a non-empty in-repository input set for the declared scheme, target(s), configuration,
+and destination. External source-looking inputs are counted outside the first-party list; generated
+ownership is checked separately; extension inputs are included only when observed. Empty,
+unresolved, malformed, oversized, or path-escaping membership remains evidence-free `BLOCKED`.

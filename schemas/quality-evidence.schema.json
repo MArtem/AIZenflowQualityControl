@@ -222,6 +222,9 @@
       "type": "array",
       "uniqueItems": true
     },
+    "sourceMembership": {
+      "$ref": "#/$defs/sourceMembership"
+    },
     "permissions": {
       "$ref": "#/$defs/permissionPolicy"
     },
@@ -357,6 +360,71 @@
         "simulatorOrDevice",
         "performanceOrInstruments"
       ]
+    },
+    "sourceMembership": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": { "const": "xcode-build-graph" },
+        "status": { "const": "verified" },
+        "scheme": { "$ref": "#/$defs/nonEmptyString" },
+        "targets": {
+          "items": { "$ref": "#/$defs/nonEmptyString" },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "configuration": { "$ref": "#/$defs/nonEmptyString" },
+        "destination": { "$ref": "#/$defs/nonEmptyString" },
+        "declaredSourcePaths": {
+          "items": { "$ref": "#/$defs/relativePath" },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "compiledSourcePaths": {
+          "items": { "$ref": "#/$defs/relativePath" },
+          "maxItems": 100000,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "compilerSectionCount": {
+          "minimum": 1,
+          "maximum": 100000,
+          "type": "integer"
+        },
+        "externalSourceInputCount": {
+          "minimum": 0,
+          "maximum": 100000,
+          "type": "integer"
+        },
+        "claims": {
+          "const": [
+            "explicit-profile-scopes",
+            "authenticated-compiled-inputs",
+            "generated-ownership-separate",
+            "external-package-inputs-counted",
+            "extension-inputs-included",
+            "path-boundary-enforced"
+          ]
+        }
+      },
+      "required": [
+        "authority",
+        "status",
+        "scheme",
+        "targets",
+        "configuration",
+        "destination",
+        "declaredSourcePaths",
+        "compiledSourcePaths",
+        "compilerSectionCount",
+        "externalSourceInputCount",
+        "claims"
+      ],
+      "type": "object"
     },
     "permissionDecision": {
       "enum": [

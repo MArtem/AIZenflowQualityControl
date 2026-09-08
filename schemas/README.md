@@ -107,3 +107,10 @@ The envelope never infers a composite evidence claim; callers needing one must s
 trusted expectation to `quality aggregate-evidence`. Missing test, UI, archive/signing,
 feature-flag, or privacy boundaries remain explicit `NOT_RUN_BY_USER_DECISION`,
 `NOT_APPLICABLE`, or `BLOCKED` steps.
+
+Build evidence may additionally carry `sourceMembership`. This receipt deliberately contains both
+the explicit profile scopes and the independently observed compiler inputs, plus target/configuration
+identity and bounded external-input counts. It is a narrow compiled-input claim; it does not turn
+tracked files into shipped files. Generated ownership, extension membership, and external package
+inputs retain their separate semantics, and the build PASS branch requires this receipt together
+with `QC.BUILD.MEMBERSHIP`.
