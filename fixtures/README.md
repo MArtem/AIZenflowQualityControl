@@ -51,12 +51,23 @@ fixtures detect release-sensitive changes only; they do not claim that signing, 
 profiles, provisioning, or App Store configuration is valid.
 
 `tests/passing-project/` and `tests/failing-project/` are explicit test-source scopes for
-`QC.TESTS.DISABLED`. The positive fixture has no unconditional skip marker; the negative fixture
-contains `XCTSkip(...)` and must return `FAIL`. The adapter does not infer Xcode target membership,
-unbound test files, or conditional `XCTSkipIf/Unless` behavior.
+`QC.TESTS.DISABLED`. The positive fixture has no static disabled attribute or skip call; the
+negative fixture contains `XCTSkip(...)` and must return `FAIL`. The adapter masks comments and
+string literals (including raw/multiline forms), preserves code inside interpolation, and labels
+preprocessor regions conservatively. It does not infer Xcode target membership, unbound test files,
+known-issue wrappers, conditional `XCTSkipIf/Unless` behavior, or selected/executed runtime counts.
 
-`swift-hot-path/passing-project/` demonstrates cancellable off-main file access and
-`swift-hot-path/failing-project/` demonstrates blocking file, image, and PDF APIs. The adapter
-must pass only the former. `swift-concurrency-escape/passing-project/` uses actor-owned state;
+`swift-hot-path/passing-project/` demonstrates code without a configured policy token and
+`swift-hot-path/failing-project/` demonstrates banned file, image, and PDF APIs. The adapter
+must pass only the former; it intentionally does not infer whether a call is off-main or a proven
+runtime hot path. `swift-concurrency-escape/passing-project/` uses actor-owned state;
 `swift-concurrency-escape/failing-project/` contains forbidden escape-hatch attributes. These
 fixtures are source-pattern contracts, not build or runtime evidence.
+
+The Swift lexical contract also has these bounded acceptance cases: tokens in line/block comments,
+normal strings, raw strings, and multiline strings stay outside the claim; the same token inside a
+string interpolation remains code and is reported; nested block comments and interpolation strings
+are masked; and unbalanced strings, comments, or interpolations return `BLOCKED`. A static finding
+under `#if`, `#if os(...)`, or a similar compile region is labeled as conditional/platform-gated
+context, while `withKnownIssue`, `XCTSkipIf/Unless`, target membership, and runtime selected/
+executed counts remain unclaimed.

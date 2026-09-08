@@ -76,6 +76,7 @@ MAX_TEST_TOTAL_BYTES = 16 * 1024 * 1024
 MAX_SWIFT_HOT_PATH_FILES = 4_096
 MAX_SWIFT_HOT_PATH_FILE_BYTES = 2 * 1024 * 1024
 MAX_SWIFT_HOT_PATH_TOTAL_BYTES = 32 * 1024 * 1024
+MAX_SWIFT_LEXER_NESTING = 128
 ASSET_SET_SUFFIXES = (
     ".appiconset", ".colorset", ".dataset", ".imageset", ".imagestack", ".launchimage",
     ".stickerpack", ".symbolset", ".arreferenceimage", ".reality", ".texture", ".spriteatlas",
@@ -109,7 +110,7 @@ TODO_METADATA = re.compile(
 )
 DISABLED_TEST_PATTERNS = (
     ("Swift Testing disabled attribute", re.compile(r"@(?:Test|Suite)\s*\([^)]{0,4096}\.disabled\b", re.DOTALL)),
-    ("unconditional XCTest skip", re.compile(r"\bXCTSkip\s*\(")),
+    ("static XCTest skip call", re.compile(r"\bXCTSkip\s*\(")),
 )
 SWIFT_HOT_PATH_EXCLUDED_COMPONENTS = {
     ".build", ".git", ".quality-control", "deriveddata", "docs", "fixture", "fixtures", "tests", "uitests",
@@ -654,13 +655,24 @@ def findings_for_disabled_tests(root: Path, paths: list[str]) -> list[dict[str, 
             text = data.decode("utf-8")
         except UnicodeDecodeError as error:
             raise AdapterError(f"test source must be UTF-8 text: {path}") from error
+        masked = mask_swift_non_code(text)
+        conditional_lines = swift_preprocessor_contexts(masked)
         for name, pattern in DISABLED_TEST_PATTERNS:
-            for match in pattern.finditer(text):
-                line = text[:match.start()].count("\n") + 1
-                findings.append({
-                    "path": path,
-                    "message": f"{name} disables or skips an applicable test at line {line}.",
-                })
+            for match in pattern.finditer(masked):
+                line = masked[:match.start()].count("\n") + 1
+                context = conditional_lines.get(line, "no surrounding preprocessor gate observed")
+                if name == "static XCTest skip call":
+                    message = (
+                        "Static XCTest skip call found at line "
+                        f"{line} ({context}); runtime condition, target membership, and selected/executed counts "
+                        "are outside this claim."
+                    )
+                else:
+                    message = (
+                        "Swift Testing disabled attribute found at line "
+                        f"{line} ({context}); the test is not evidence of runtime selection or execution."
+                    )
+                findings.append({"path": path, "message": message})
                 if len(findings) >= MAX_FINDINGS:
                     return findings
     return findings
@@ -680,60 +692,164 @@ def swift_hot_path_source_paths(root: Path, paths: list[str]) -> list[str]:
     return selected
 
 
-def mask_swift_comments(text: str) -> str:
-    """Mask comments while preserving line positions for deterministic source diagnostics."""
+def mask_swift_non_code(text: str) -> str:
+    """Mask Swift comments and string literal text while preserving interpolation code and lines.
+
+    This is deliberately a bounded lexical adapter, not a Swift parser. It keeps code inside
+    ``\(...)`` / raw-string interpolation visible to the policy regexes, masks nested comments and
+    strings, and blocks malformed or unsupported lexical structure instead of silently returning a
+    false PASS.
+    """
     characters = list(text)
-    index = 0
-    state = "code"
-    block_depth = 0
-    while index < len(characters):
-        if state == "line":
-            if characters[index] == "\n":
-                state = "code"
-            else:
-                characters[index] = " "
-            index += 1
-            continue
-        if state == "block":
-            if text.startswith("/*", index):
-                block_depth += 1
-                characters[index:index + 2] = [" ", " "]
-                index += 2
+
+    def mask_range(start: int, end: int) -> None:
+        for position in range(start, end):
+            if characters[position] != "\n":
+                characters[position] = " "
+
+    def string_start(index: int) -> tuple[int, int] | None:
+        quote = index
+        hashes = 0
+        while quote < len(text) and text[quote] == "#":
+            hashes += 1
+            quote += 1
+        if quote >= len(text) or text[quote] != '"':
+            return None
+        if hashes > 0 and hashes > MAX_STRING_LENGTH:
+            raise AdapterError("Swift raw-string delimiter exceeds the immutable lexer limit")
+        delimiter_length = 3 if text.startswith('"""', quote) else 1
+        return hashes, delimiter_length
+
+    def interpolation_marker(index: int, hashes: int) -> int:
+        marker = "\\" + ("#" * hashes) + "("
+        return len(marker) if text.startswith(marker, index) else 0
+
+    def scan_block_comment(index: int, nesting: int) -> int:
+        if nesting > MAX_SWIFT_LEXER_NESTING:
+            raise AdapterError("Swift block-comment nesting exceeds the immutable lexer limit")
+        depth = 1
+        position = index + 2
+        while position < len(text):
+            if text.startswith("/*", position):
+                depth += 1
+                if depth > MAX_SWIFT_LEXER_NESTING:
+                    raise AdapterError("Swift block-comment nesting exceeds the immutable lexer limit")
+                position += 2
                 continue
-            if text.startswith("*/", index):
-                block_depth -= 1
-                characters[index:index + 2] = [" ", " "]
-                index += 2
-                if block_depth == 0:
-                    state = "code"
+            if text.startswith("*/", position):
+                depth -= 1
+                position += 2
+                if depth == 0:
+                    mask_range(index, position)
+                    return position
                 continue
-            if characters[index] != "\n":
-                characters[index] = " "
-            index += 1
-            continue
-        if state == "string":
-            if characters[index] == "\\":
-                index += 2
+            position += 1
+        raise AdapterError("Swift source contains an unterminated block comment")
+
+    def scan_string(index: int, nesting: int) -> int:
+        if nesting > MAX_SWIFT_LEXER_NESTING:
+            raise AdapterError("Swift string/interpolation nesting exceeds the immutable lexer limit")
+        start = string_start(index)
+        if start is None:
+            raise AdapterError("Swift lexer entered an invalid string state")
+        hashes, delimiter_length = start
+        quote = index + hashes
+        closing = ('"' * delimiter_length) + ("#" * hashes)
+        position = quote + delimiter_length
+        literal_segment_start = index
+        while position < len(text):
+            marker_length = interpolation_marker(position, hashes)
+            if marker_length:
+                mask_range(literal_segment_start, position + marker_length)
+                interpolation_end = scan_interpolation(position + marker_length, nesting + 1)
+                literal_segment_start = interpolation_end
+                position = interpolation_end
                 continue
-            if characters[index] == '"':
-                state = "code"
-            index += 1
+            if text.startswith(closing, position):
+                end = position + len(closing)
+                mask_range(literal_segment_start, end)
+                return end
+            if text[position] == "\\" and hashes == 0:
+                position += 2
+                continue
+            position += 1
+        raise AdapterError("Swift source contains an unterminated string literal")
+
+    def scan_interpolation(index: int, nesting: int) -> int:
+        depth = 1
+        position = index
+        while position < len(text):
+            if text.startswith("//", position):
+                newline = text.find("\n", position + 2)
+                if newline == -1:
+                    mask_range(position, len(text))
+                    raise AdapterError("Swift source contains an unterminated string interpolation")
+                mask_range(position, newline)
+                position = newline
+                continue
+            if text.startswith("/*", position):
+                position = scan_block_comment(position, nesting)
+                continue
+            if text[position] == '"' or text[position] == "#":
+                start = string_start(position)
+                if start is not None:
+                    position = scan_string(position, nesting)
+                    continue
+            if text[position] == "(":
+                depth += 1
+            elif text[position] == ")":
+                depth -= 1
+                if depth == 0:
+                    return position + 1
+            position += 1
+        raise AdapterError("Swift source contains an unterminated string interpolation")
+
+    position = 0
+    while position < len(text):
+        if text.startswith("//", position):
+            newline = text.find("\n", position + 2)
+            if newline == -1:
+                mask_range(position, len(text))
+                break
+            mask_range(position, newline)
+            position = newline
             continue
-        if text.startswith("//", index):
-            characters[index:index + 2] = [" ", " "]
-            state = "line"
-            index += 2
+        if text.startswith("/*", position):
+            position = scan_block_comment(position, 0)
             continue
-        if text.startswith("/*", index):
-            characters[index:index + 2] = [" ", " "]
-            state = "block"
-            block_depth = 1
-            index += 2
-            continue
-        if characters[index] == '"':
-            state = "string"
-        index += 1
+        if text[position] == '"' or text[position] == "#":
+            start = string_start(position)
+            if start is not None:
+                position = scan_string(position, 0)
+                continue
+        position += 1
     return "".join(characters)
+
+
+def swift_preprocessor_contexts(masked: str) -> dict[int, str]:
+    """Return conservative compile-scope labels for lines inside ``#if`` regions."""
+    contexts: dict[int, str] = {}
+    stack: list[str] = []
+    for line_number, line in enumerate(masked.splitlines(), 1):
+        directive = re.match(r"^[ \t]*#(if|elseif|else|endif)\b(?P<condition>.*)$", line)
+        if directive is not None:
+            kind = directive.group(1)
+            if kind == "if":
+                condition = directive.group("condition").strip()
+                label = "OS/platform-gated compile scope" if re.search(
+                    r"\b(?:os|arch|targetEnvironment|canImport)\s*\(", condition
+                ) else "conditional compile scope"
+                stack.append(label)
+            elif kind in {"elseif", "else"} and stack:
+                condition = directive.group("condition").strip()
+                stack[-1] = "OS/platform-gated compile scope" if re.search(
+                    r"\b(?:os|arch|targetEnvironment|canImport)\s*\(", condition
+                ) else "conditional compile scope"
+            elif kind == "endif" and stack:
+                stack.pop()
+        if stack:
+            contexts[line_number] = stack[-1]
+    return contexts
 
 
 def findings_for_swift_source_patterns(
@@ -753,7 +869,7 @@ def findings_for_swift_source_patterns(
             text = data.decode("utf-8")
         except UnicodeDecodeError as error:
             raise AdapterError(f"shipped Swift source must be UTF-8 text: {path}") from error
-        masked = mask_swift_comments(text)
+        masked = mask_swift_non_code(text)
         for name, pattern in patterns:
             for match in pattern.finditer(masked):
                 line = masked[:match.start()].count("\n") + 1
@@ -771,7 +887,7 @@ def findings_for_swift_hot_paths(root: Path, paths: list[str]) -> list[dict[str,
         root,
         paths,
         SWIFT_HOT_PATH_PATTERNS,
-        "move work behind an explicit asynchronous ownership boundary.",
+        "this is a lexical API policy ban; the adapter does not prove UI executor context or runtime performance.",
     )
 
 
@@ -1880,7 +1996,7 @@ def main() -> int:
                     arguments.check,
                     revision,
                     "FAIL",
-                    "Explicitly disabled or unconditionally skipped test code was found in the requested test scope.",
+                    "Static disabled attributes or XCTest skip calls were found in the requested test scope.",
                     findings,
                 )
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1889,7 +2005,7 @@ def main() -> int:
                 arguments.check,
                 revision,
                 "PASS",
-                "No explicitly disabled or unconditionally skipped tests were found in the requested scope; target membership and conditional skips remain outside this claim.",
+                "No static disabled attributes or XCTest skip calls were found in the requested scope; target membership, conditional/platform scope, known issues, and selected/executed runtime counts remain outside this claim.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
@@ -1900,7 +2016,7 @@ def main() -> int:
                     arguments.check,
                     revision,
                     "FAIL",
-                    "Forbidden synchronous or blocking Swift hot-path operations were found in shipped source.",
+                    "Configured synchronous or blocking Swift APIs violated the shipped-source policy ban.",
                     findings,
                 )
                 print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1909,7 +2025,7 @@ def main() -> int:
                 arguments.check,
                 revision,
                 "PASS",
-                "No configured synchronous or blocking Swift hot-path operations were found in shipped source; comments, tests, fixtures, and documentation are outside this check.",
+                "No configured synchronous or blocking Swift API policy tokens were found in shipped source; executor context and runtime performance remain outside this claim.",
             )
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
             return 0

@@ -55,10 +55,14 @@ and `HEAD`. The adapter reports changed paths as `FAIL`, malformed or untrusted 
 and no changes as `PASS`; it never infers signing correctness or release authorization.
 
 `QC.STATIC.SWIFT_HOT_PATH` and `QC.STATIC.SWIFT_CONCURRENCY_ESCAPE` are executable,
-repository-neutral shipped-source gates. The first blocks only high-confidence synchronous or
-blocking media/file operations; the second blocks known Swift concurrency escape hatches. Both
-operate on clean Git `HEAD`, exclude tests/fixtures/documentation, fail closed on malformed or
-oversized input, and provide no suppression mechanism.
+repository-neutral shipped-source gates. The first is an explicit lexical policy ban for the
+configured synchronous or blocking media/file APIs; it does not infer a UI executor or runtime
+hot path. The second blocks known Swift concurrency escape hatches. Both operate on clean Git
+`HEAD`, exclude tests/fixtures/documentation, mask comments and string literals while preserving
+interpolation code, fail closed on malformed or oversized input, and provide no suppression
+mechanism. `QC.TESTS.DISABLED` likewise reports static disabled attributes and skip calls only;
+conditional compilation, target membership, known-issue handling, and selected/executed runtime
+counts remain separate evidence claims.
 
 `QC.BUILD.MEMBERSHIP` is a build-evidence gate rather than a filename scan. Its receipt carries the
 profile's explicit source scope separately from the authenticated Xcode compiler inputs for one

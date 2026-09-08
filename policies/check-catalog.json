@@ -139,19 +139,19 @@
     },
     {
       "id": "QC.TESTS.DISABLED",
-      "scope": "Explicitly disabled or unconditionally skipped tests in an explicitly declared test-source scope",
+      "scope": "Static disabled attributes or XCTest skip calls in an explicitly declared test-source scope",
       "severity": "block",
       "applicability": "profile",
-      "remediation": "Restore the test or record an explicit applicability decision and owner.",
+      "remediation": "Restore the test or record the conditional/platform applicability decision and owner; runtime selection and execution counts require separate evidence.",
       "fixture": { "positive": "fixtures/tests/passing-project/", "negative": "fixtures/tests/failing-project/" },
       "implementation": "implemented"
     },
     {
       "id": "QC.STATIC.SWIFT_HOT_PATH",
-      "scope": "High-confidence synchronous or blocking file, image, PDF, and video operations in shipped Swift source",
+      "scope": "Configured synchronous or blocking file, image, PDF, and related APIs in shipped Swift source (explicit lexical policy ban)",
       "severity": "block",
       "applicability": "profile",
-      "remediation": "Move expensive or blocking work behind an explicit cancellable asynchronous ownership boundary; do not suppress the finding.",
+      "remediation": "Remove or replace the banned API, or change the approved policy deliberately; this adapter does not infer executor context, runtime performance, or a sufficient asynchronous boundary.",
       "fixture": { "positive": "fixtures/swift-hot-path/passing-project/", "negative": "fixtures/swift-hot-path/failing-project/" },
       "implementation": "implemented"
     },

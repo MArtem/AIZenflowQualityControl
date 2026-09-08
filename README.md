@@ -63,13 +63,16 @@ and a tracked configuration, reports its tool/configuration digests, and never c
 Configuration/signing is a separate manual baseline comparison: it reports only explicitly listed
 release-sensitive path changes and never claims signing or App Store correctness.
 
-The catalog also includes two app-neutral shipped-source gates: `QC.STATIC.SWIFT_HOT_PATH` blocks
-only high-confidence synchronous file/media operations, and `QC.STATIC.SWIFT_CONCURRENCY_ESCAPE`
+The catalog also includes two app-neutral shipped-source gates: `QC.STATIC.SWIFT_HOT_PATH` applies
+an explicit lexical policy ban to configured synchronous file/media operations, and `QC.STATIC.SWIFT_CONCURRENCY_ESCAPE`
 blocks known Swift concurrency escape hatches (`@unchecked Sendable`, `nonisolated(unsafe)`,
 `@preconcurrency`, and `@_unsafeInheritExecutor`). Both scan the clean Git `HEAD`, exclude tests,
-fixtures, comments, and documentation, fail closed on malformed or oversized input, and provide no
-suppression mechanism. They complement compiler diagnostics; they do not claim that a static scan
-proves actor correctness, runtime behavior, or production readiness.
+fixtures, comments, string literals, and documentation, preserve code inside string interpolation, fail closed on
+malformed or oversized input, and provide no suppression mechanism. `QC.TESTS.DISABLED` applies the
+same lexical boundary to static disabled attributes and skip calls; conditional/platform scope and
+selected/executed runtime counts require separate evidence. These checks complement compiler
+diagnostics; they do not claim that a static scan proves actor correctness, runtime behavior, or
+production readiness.
 
 ## Authority Boundary
 
