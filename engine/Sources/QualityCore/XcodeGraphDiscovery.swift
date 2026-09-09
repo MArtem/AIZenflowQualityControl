@@ -4,8 +4,8 @@ import Foundation
 enum XcodeGraphDiscovery {
     private static let maximumInvocations = 64
     private static let maximumOutputBytes = 4 * 1_024 * 1_024
-    private static let invocationTimeoutSeconds: TimeInterval = 20
-    private static let totalTimeoutSeconds: TimeInterval = 120
+    private static let invocationTimeoutSeconds: TimeInterval = 60
+    private static let totalTimeoutSeconds: TimeInterval = 300
 
     static func checks(
         profile: ProjectProfile,
@@ -143,7 +143,6 @@ enum XcodeGraphDiscovery {
                         "-scheme", scheme.name,
                         "-configuration", configuration,
                         "-destination", destination,
-                        "build",
                         "-showBuildSettings", "-json",
                         "-derivedDataPath", paths.derivedData.path
                     ]

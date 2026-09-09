@@ -350,9 +350,7 @@ public enum QualityCommands {
                 )]
             )
         case let .success(profile):
-            let contractIssues = ProfileValidator.validate(profile).filter {
-                $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
-            }
+            let contractIssues = ProfileValidator.validate(profile)
             guard contractIssues.isEmpty else {
                 return QualityModePlan(
                     mode: mode,
@@ -427,11 +425,8 @@ public enum QualityCommands {
             return QualityReport(command: "doctor", checks: [check])
         case let .success(profile):
             let issues = ProfileValidator.validate(profile)
-            let contractIssues = issues.filter {
-                $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
-            }
-            guard contractIssues.isEmpty else {
-                return QualityReport(command: "doctor", checks: checks(for: contractIssues))
+            guard issues.isEmpty else {
+                return QualityReport(command: "doctor", checks: checks(for: issues))
             }
 
             var checks: [QualityCheck] = [
@@ -662,7 +657,9 @@ public enum QualityCommands {
         let manifestDigest = SHA256.hash(data: manifestData).map { String(format: "%02x", $0) }.joined()
         do {
             let profile = try ProfileLoader.decodeProfile(from: profileData)
-            let profileChecks = checks(for: ProfileValidator.validate(profile))
+            let profileIssues = ProfileValidator.validate(profile)
+                + (ProfileValidator.xcodeGraphResolutionIssue(for: profile).map { [$0] } ?? [])
+            let profileChecks = checks(for: profileIssues)
             guard profileChecks.isEmpty else {
                 return StaticWorkerResponse(report: QualityReport(command: "static", checks: profileChecks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)
             }
@@ -705,12 +702,11 @@ public enum QualityCommands {
             return QualityReport(command: "static", checks: [check])
         case let .success(profile):
             let profileIssues = ProfileValidator.validate(profile)
-            let blockingProfileIssues = profileIssues.filter {
-                scope != .explicitSourcePaths
-                    || $0.code != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED"
-            }
-            guard blockingProfileIssues.isEmpty else {
-                return QualityReport(command: "static", checks: checks(for: blockingProfileIssues))
+                + (scope == .explicitSourcePaths
+                    ? []
+                    : (ProfileValidator.xcodeGraphResolutionIssue(for: profile).map { [$0] } ?? []))
+            guard profileIssues.isEmpty else {
+                return QualityReport(command: "static", checks: checks(for: profileIssues))
             }
 
             let policy: StaticPolicy
@@ -770,6 +766,20 @@ public enum QualityCommands {
 
             guard rootCheck.status == .pass else {
                 return QualityReport(command: "static", checks: checks)
+            }
+
+            let sandboxRootPath = ProfileValidator.resolveSandboxPaths(
+                for: profile,
+                under: repositoryRoot
+            )?.root.resolvingSymlinksInPath().standardizedFileURL.path
+
+            func isInsideProfileSandbox(_ url: URL) -> Bool {
+                guard let sandboxRootPath else {
+                    return false
+                }
+                let candidatePath = url.resolvingSymlinksInPath().standardizedFileURL.path
+                return candidatePath == sandboxRootPath
+                    || candidatePath.hasPrefix(sandboxRootPath + "/")
             }
 
             var scannedFileCount = 0
@@ -989,6 +999,24 @@ public enum QualityCommands {
                                 .fileSizeKey
                             ]
                         )
+
+                        if values.isSymbolicLink == true {
+                            entries.append(
+                                StaticScanEntry(
+                                    url: fileURL,
+                                    relativePath: entryRelativePath,
+                                    metadata: .available(values)
+                                )
+                            )
+                            continue
+                        }
+
+                        if isInsideProfileSandbox(fileURL) {
+                            if values.isDirectory == true {
+                                enumerator.skipDescendants()
+                            }
+                            continue
+                        }
 
                         if values.isDirectory == true {
                             let isForbiddenDirectory = policy.matchesForbiddenSuffix(

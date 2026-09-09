@@ -364,6 +364,20 @@ private enum ProfileValidationLimits {
 }
 
 public enum ProfileValidator {
+    public static func xcodeGraphResolutionIssue(
+        for profile: ProjectProfile
+    ) -> ValidationIssue? {
+        guard profile.schemaVersion == 2,
+              profile.xcode?.sourceMembership.authority == .xcodeBuildGraph else {
+            return nil
+        }
+        return ValidationIssue(
+            code: "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED",
+            path: "xcode.sourceMembership",
+            message: "SchemaVersion 2 source membership remains blocked until authoritative Xcode graph or build resolution succeeds."
+        )
+    }
+
     public static func validate(_ profile: ProjectProfile) -> [ValidationIssue] {
         var issues: [ValidationIssue] = []
 
@@ -493,13 +507,6 @@ public enum ProfileValidator {
             issues.append(contentsOf: validateEnginePin(profile.engine))
             issues.append(contentsOf: validateXcodeConfiguration(profile.xcode))
             issues.append(contentsOf: validateApplicability(profile.applicability))
-            issues.append(
-                ValidationIssue(
-                    code: "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED",
-                    path: "xcode.sourceMembership",
-                    message: "SchemaVersion 2 remains blocked until authoritative Xcode graph resolution succeeds."
-                )
-            )
             return issues
         default:
             return []

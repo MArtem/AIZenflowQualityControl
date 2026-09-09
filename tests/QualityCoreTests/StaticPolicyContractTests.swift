@@ -131,6 +131,64 @@ struct StaticPolicyContractTests {
         #expect(!report.checks.contains { $0.id == "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED" })
     }
 
+    @Test("Explicit source-path scope excludes only the profile sandbox")
+    func profileSandboxDoesNotCreateFalseArtifactFindings() throws {
+        let profile = try makeSchemaV2ScanProfile(
+            sandboxRoot: "Sources/.quality-control",
+            sandboxCache: "Sources/.quality-control/cache"
+        )
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("struct SafeFixture {}".utf8), at: "repository/Sources/Safe.swift")
+        try profile.write(
+            Data("generated".utf8),
+            at: "repository/Sources/.quality-control/cache/Build.xcresult/Info.plist"
+        )
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            scope: .explicitSourcePaths
+        )
+
+        #expect(report.status == .pass)
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.FORBIDDEN_ARTIFACT" })
+        #expect(report.checks.contains { $0.id == "QC.STATIC.SCAN" && $0.status == .pass })
+    }
+
+    @Test("A symlink targeting the profile sandbox still requires review")
+    func symlinkIntoProfileSandboxIsNotSilentlyExcluded() throws {
+        let profile = try makeSchemaV2ScanProfile(
+            sandboxRoot: "Sources/.quality-control",
+            sandboxCache: "Sources/.quality-control/cache"
+        )
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("struct SafeFixture {}".utf8), at: "repository/Sources/Safe.swift")
+        try profile.write(
+            Data("generated".utf8),
+            at: "repository/Sources/.quality-control/cache/Build.xcresult/Info.plist"
+        )
+        try profile.createSymbolicLink(
+            at: "repository/Sources/SandboxLink",
+            destination: ".quality-control/cache"
+        )
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            scope: .explicitSourcePaths
+        )
+
+        #expect(report.status == .blocked)
+        #expect(report.checks.contains {
+            $0.id == "QC.STATIC.SYMLINK_REQUIRES_REVIEW"
+                && $0.status == .blocked
+                && $0.path == "Sources/SandboxLink"
+        })
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
     @Test("A source scope with no regular files is blocked")
     func emptySourceScopeIsBlocked() throws {
         let profile = try makeScanProfile()
@@ -370,7 +428,10 @@ struct StaticPolicyContractTests {
         })
     }
 
-    private func makeSchemaV2ScanProfile() throws -> TemporaryProfile {
+    private func makeSchemaV2ScanProfile(
+        sandboxRoot: String = ".quality-control",
+        sandboxCache: String = ".quality-control/cache"
+    ) throws -> TemporaryProfile {
         try TemporaryProfile(dataProvider: { _ in
             let profile: [String: Any] = [
                 "schemaVersion": 2,
@@ -386,7 +447,7 @@ struct StaticPolicyContractTests {
                     "simulatorOrDevice": "ask",
                     "performanceOrInstruments": "ask"
                 ],
-                "sandbox": ["root": ".quality-control", "cache": ".quality-control/cache"],
+                "sandbox": ["root": sandboxRoot, "cache": sandboxCache],
                 "engine": [
                     "version": "0.1.0-dev",
                     "revision": String(repeating: "a", count: 40)
