@@ -768,6 +768,20 @@ public enum QualityCommands {
                 return QualityReport(command: "static", checks: checks)
             }
 
+            let sandboxRootPath = ProfileValidator.resolveSandboxPaths(
+                for: profile,
+                under: repositoryRoot
+            )?.root.resolvingSymlinksInPath().standardizedFileURL.path
+
+            func isInsideProfileSandbox(_ url: URL) -> Bool {
+                guard let sandboxRootPath else {
+                    return false
+                }
+                let candidatePath = url.resolvingSymlinksInPath().standardizedFileURL.path
+                return candidatePath == sandboxRootPath
+                    || candidatePath.hasPrefix(sandboxRootPath + "/")
+            }
+
             var scannedFileCount = 0
             var scannedEntryCount = 0
             var reportedFindingCount = 0
@@ -985,6 +999,13 @@ public enum QualityCommands {
                                 .fileSizeKey
                             ]
                         )
+
+                        if isInsideProfileSandbox(fileURL) {
+                            if values.isDirectory == true {
+                                enumerator.skipDescendants()
+                            }
+                            continue
+                        }
 
                         if values.isDirectory == true {
                             let isForbiddenDirectory = policy.matchesForbiddenSuffix(

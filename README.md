@@ -168,7 +168,9 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
   checks from explicit profile and policy inputs. Schema version 2 remains blocked by default until
   Xcode build-graph membership is authenticated. The explicit `--scope explicit-source-paths`
   variant scans only the profile's declared source paths and states that it does not assert Xcode
-  target membership; it cannot produce build or static-evidence proof.
+  target membership; it cannot produce build or static-evidence proof. Filesystem scanning skips
+  only the profile-declared sandbox root so task-local QC artifacts do not become source findings;
+  Git-tree static evidence remains bound to tracked source bytes.
 - `static-evidence` scans the asserted Git-tree manifest directly; it never scans mutable
   source-worktree bytes or projects Git paths onto a filesystem. `PASS` includes evidence and an empty-issue verifier result;
   the caller must build the pinned engine first and supply that exact executable's `codesign`
