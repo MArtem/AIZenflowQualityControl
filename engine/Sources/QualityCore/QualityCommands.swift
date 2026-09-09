@@ -1000,6 +1000,17 @@ public enum QualityCommands {
                             ]
                         )
 
+                        if values.isSymbolicLink == true {
+                            entries.append(
+                                StaticScanEntry(
+                                    url: fileURL,
+                                    relativePath: entryRelativePath,
+                                    metadata: .available(values)
+                                )
+                            )
+                            continue
+                        }
+
                         if isInsideProfileSandbox(fileURL) {
                             if values.isDirectory == true {
                                 enumerator.skipDescendants()

@@ -156,6 +156,39 @@ struct StaticPolicyContractTests {
         #expect(report.checks.contains { $0.id == "QC.STATIC.SCAN" && $0.status == .pass })
     }
 
+    @Test("A symlink targeting the profile sandbox still requires review")
+    func symlinkIntoProfileSandboxIsNotSilentlyExcluded() throws {
+        let profile = try makeSchemaV2ScanProfile(
+            sandboxRoot: "Sources/.quality-control",
+            sandboxCache: "Sources/.quality-control/cache"
+        )
+        defer { expectSuccessfulRemoval(of: profile) }
+        try profile.write(Data("struct SafeFixture {}".utf8), at: "repository/Sources/Safe.swift")
+        try profile.write(
+            Data("generated".utf8),
+            at: "repository/Sources/.quality-control/cache/Build.xcresult/Info.plist"
+        )
+        try profile.createSymbolicLink(
+            at: "repository/Sources/SandboxLink",
+            destination: ".quality-control/cache"
+        )
+
+        let report = QualityCommands.staticScan(
+            profileURL: profile.url,
+            policyURL: defaultStaticPolicyURL,
+            repositoryRoot: repositoryURL(for: profile),
+            scope: .explicitSourcePaths
+        )
+
+        #expect(report.status == .blocked)
+        #expect(report.checks.contains {
+            $0.id == "QC.STATIC.SYMLINK_REQUIRES_REVIEW"
+                && $0.status == .blocked
+                && $0.path == "Sources/SandboxLink"
+        })
+        #expect(!report.checks.contains { $0.id == "QC.STATIC.SCAN" })
+    }
+
     @Test("A source scope with no regular files is blocked")
     func emptySourceScopeIsBlocked() throws {
         let profile = try makeScanProfile()
