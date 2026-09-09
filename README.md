@@ -138,6 +138,7 @@ swift run quality static --profile <profile.json> --policy <policy.json> --repos
 quality mode-plan --profile <profile.json> --mode <static|build|build-and-tests|full>
 quality mode-execute --profile <profile.json> --mode <static|build|build-and-tests|full> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> [--scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>]
 quality static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex>
+quality graph-static-evidence --profile <profile.json> --policy <policy.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --snapshot-root <private-writable-directory> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> --scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>
 quality build-evidence --profile <profile.json> --repository-root <source-repository> --engine-repository-root <engine-repository> --source-repository <owner/name> --expected-source-revision <40-hex> --expected-engine-revision <40-hex> --expected-engine-cdhash <40-hex> --scheme <scheme> --configuration <configuration> --destination <destination> --execution-context <local|github>
 quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expectation <trusted-expectation.json>
 ```
@@ -175,6 +176,11 @@ quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expecta
   source-worktree bytes or projects Git paths onto a filesystem. `PASS` includes evidence and an empty-issue verifier result;
   the caller must build the pinned engine first and supply that exact executable's `codesign`
   `CDHash`; preflight, identity, snapshot, process, or checkout failures are evidence-free `BLOCKED`.
+- `graph-static-evidence` is the graph-scoped variant. It runs one authenticated build first, keeps
+  the package-internal build receipt in memory, and scans only the compiler-membership paths from
+  that receipt. Its PASS result requires verified `sourceMembership`; caller-supplied membership or
+  a standalone build receipt cannot authorize this path. A build failure or missing membership is
+  terminal and carries no static evidence.
 - `build-evidence` runs exactly one profile-declared Xcode build through the bounded supervisor.
   The profile must be a regular, non-symlink Git-tracked file inside the clean source checkout and
   its working bytes must equal the expected source revision. Source and engine checkouts containing

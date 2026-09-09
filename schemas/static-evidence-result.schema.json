@@ -7,12 +7,42 @@
   "required": ["schemaVersion", "command", "status", "report", "evidence", "verification"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "command": { "const": "static-evidence" },
+    "command": { "enum": ["static-evidence", "graph-static-evidence"] },
     "status": { "enum": ["PASS", "FAIL", "BLOCKED"] },
     "report": { "$ref": "#/$defs/report" },
     "evidence": { "oneOf": [{ "type": "null" }, { "$ref": "quality-evidence.schema.json" }] },
     "verification": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/verification" }] }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "command": { "const": "graph-static-evidence" }
+        },
+        "required": ["command"]
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "allOf": [
+              {
+                "required": ["sourceMembership"],
+                "properties": {
+                  "profileSchemaVersion": { "const": 2 },
+                  "sourceMembership": {
+                    "properties": {
+                      "authority": { "const": "xcode-build-graph" },
+                      "status": { "const": "verified" }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
   "oneOf": [
     {
       "properties": {

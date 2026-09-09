@@ -650,7 +650,8 @@ public enum QualityCommands {
     package static func staticEvidenceWorkerResponse(
         profileData: Data,
         policyData: Data,
-        manifestData: Data
+        manifestData: Data,
+        scope: StaticScanScope = .xcodeBuildGraph
     ) -> StaticWorkerResponse {
         let profileDigest = SHA256.hash(data: profileData).map { String(format: "%02x", $0) }.joined()
         let policyDigest = SHA256.hash(data: policyData).map { String(format: "%02x", $0) }.joined()
@@ -658,7 +659,9 @@ public enum QualityCommands {
         do {
             let profile = try ProfileLoader.decodeProfile(from: profileData)
             let profileIssues = ProfileValidator.validate(profile)
-                + (ProfileValidator.xcodeGraphResolutionIssue(for: profile).map { [$0] } ?? [])
+                + (scope == .xcodeBuildGraph
+                    ? (ProfileValidator.xcodeGraphResolutionIssue(for: profile).map { [$0] } ?? [])
+                    : [])
             let profileChecks = checks(for: profileIssues)
             guard profileChecks.isEmpty else {
                 return StaticWorkerResponse(report: QualityReport(command: "static", checks: profileChecks), profileSHA256: profileDigest, policySHA256: policyDigest, sourceManifestSHA256: manifestDigest)

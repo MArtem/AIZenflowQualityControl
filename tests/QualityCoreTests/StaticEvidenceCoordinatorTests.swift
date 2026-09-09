@@ -201,6 +201,65 @@ struct StaticEvidenceCoordinatorTests {
         #expect(receipt.evidence.residualRisks.isEmpty)
     }
 
+    @Test("Schema version 2 graph evidence requires an authenticated build receipt")
+    func schemaV2RequiresBuildReceipt() throws {
+        let snapshot = try validGraphProfileSnapshot()
+
+        #expect(throws: StaticEvidenceCoordinationError.self) {
+            try StaticEvidenceCoordinator.coordinate(
+                observation: try observation(
+                    status: .pass,
+                    profileSHA256: snapshot.sha256,
+                    policySHA256: policySHA256
+                ),
+                context: context(profileSnapshot: snapshot)
+            )
+        }
+    }
+
+    @Test("Schema version 2 graph evidence carries only compiler membership from the build receipt")
+    func schemaV2CarriesAuthenticatedMembership() throws {
+        let snapshot = try validGraphProfileSnapshot()
+        let buildReceipt = try graphBuildReceipt(profileSnapshot: snapshot)
+        let receipt = try StaticEvidenceCoordinator.coordinate(
+            observation: try observation(
+                status: .pass,
+                profileSHA256: snapshot.sha256,
+                policySHA256: policySHA256
+            ),
+            context: context(profileSnapshot: snapshot),
+            buildReceipt: buildReceipt
+        )
+
+        #expect(receipt.evidence.sourceMembership?.status == .verified)
+        #expect(receipt.evidence.sourceMembership?.authority == .xcodeBuildGraph)
+        #expect(receipt.evidence.sourceMembership?.compiledSourcePaths == ["Sources/App.swift"])
+        #expect(receipt.verification.verdict == .ready)
+        #expect(receipt.verification.issues.isEmpty)
+    }
+
+    @Test("A build receipt with a different source identity cannot authorize graph static evidence")
+    func staleBuildReceiptFailsClosed() throws {
+        let snapshot = try validGraphProfileSnapshot()
+        let buildReceipt = try graphBuildReceipt(profileSnapshot: snapshot)
+        let staleContext = context(
+            profileSnapshot: snapshot,
+            sourceRevision: String(repeating: "e", count: 40)
+        )
+
+        #expect(throws: StaticEvidenceCoordinationError.self) {
+            try StaticEvidenceCoordinator.coordinate(
+                observation: try observation(
+                    status: .pass,
+                    profileSHA256: snapshot.sha256,
+                    policySHA256: policySHA256
+                ),
+                context: staleContext,
+                buildReceipt: buildReceipt
+            )
+        }
+    }
+
     private func coordinate(
         snapshot: ProfileSnapshot,
         policySHA256: String,
@@ -282,6 +341,56 @@ struct StaticEvidenceCoordinatorTests {
         try ProfileSnapshot(data: Data(validProfileJSON.utf8))
     }
 
+    private func validGraphProfileSnapshot() throws -> ProfileSnapshot {
+        try ProfileSnapshot(data: Data(validGraphProfileJSON.utf8))
+    }
+
+    private func graphBuildReceipt(
+        profileSnapshot: ProfileSnapshot
+    ) throws -> XcodeBuildEvidenceReceipt {
+        try XcodeBuildEvidenceCoordinator.coordinate(
+            observation: XcodeBuildSupervisionObservation(
+                selection: XcodeBuildSelection(
+                    scheme: "App",
+                    configuration: "Debug",
+                    destination: "platform=macOS"
+                ),
+                resultBundlePath: "/sandbox/cache/evidence/Build.xcresult",
+                evidence: XcodeBuildEvidenceObservation(
+                    buildResultsSHA256: String(repeating: "c", count: 64),
+                    buildLogSHA256: String(repeating: "d", count: 64),
+                    actionTitle: "Build",
+                    destination: XcodeBuildDestinationObservation(
+                        deviceID: "device-id",
+                        deviceName: "Mac",
+                        architecture: "arm64",
+                        modelName: "Mac",
+                        platform: "macOS",
+                        osVersion: "15.0",
+                        osBuildNumber: nil
+                    ),
+                    startTime: 1,
+                    endTime: 2,
+                    warningCount: 0,
+                    analyzerWarningCount: 0,
+                    compiledSourcePaths: ["Sources/App.swift"],
+                    compilerSectionCount: 1
+                )
+            ),
+            context: XcodeBuildEvidenceObservedContext(
+                sourceRepository: "MArtem/example",
+                sourceRevision: sourceRevision,
+                engineVersion: XcodeBuildEvidenceCoordinator.engineVersion,
+                engineRevision: engineRevision,
+                engineCodeDirectoryHash: engineCodeDirectoryHash,
+                toolchain: toolchain,
+                profileSnapshot: profileSnapshot,
+                executionAction: .localBuildExecution,
+                userAuthorizedActions: [.localBuildExecution]
+            )
+        )
+    }
+
     private func terminationStatus(for status: QualityStatus) -> Int32 {
         switch status {
         case .pass:
@@ -296,6 +405,12 @@ struct StaticEvidenceCoordinatorTests {
     private var validProfileJSON: String {
         """
         {"schemaVersion":1,"project":{"kind":"xcodeproj","path":"App.xcodeproj"},"scheme":"App","sourcePaths":["Sources"],"mode":"controlled","permissions":{"testCreation":"allow","testModification":"allow","localTestExecution":"ask","githubExecution":"manual","uiTests":"deny","simulatorOrDevice":"deny","performanceOrInstruments":"deny"},"sandbox":{"root":"/sandbox","cache":"/sandbox/cache"}}
+        """
+    }
+
+    private var validGraphProfileJSON: String {
+        """
+        {"schemaVersion":2,"project":{"kind":"xcodeproj","path":"App.xcodeproj"},"sourcePaths":["Sources"],"mode":"controlled","permissions":{"testCreation":"allow","testModification":"allow","localTestExecution":"ask","githubExecution":"manual","uiTests":"deny","simulatorOrDevice":"deny","performanceOrInstruments":"deny"},"sandbox":{"root":".quality-control","cache":".quality-control/cache"},"engine":{"version":"0.1.0-dev","revision":"(engineRevision)"},"xcode":{"sourceMembership":{"authority":"xcode-build-graph"},"schemes":[{"name":"App","targets":["App"],"configurations":["Debug"],"destinations":["platform=macOS"],"testPlans":[]}]},"applicability":[{"capability":"tests","status":"applicable","reason":"Required.","owner":"Owner","revisitCondition":"Profile changes."},{"capability":"snapshotTests","status":"notApplicable","reason":"Absent.","owner":"Owner","revisitCondition":"Feature changes."},{"capability":"uiTests","status":"deferred","reason":"User controlled.","owner":"Owner","revisitCondition":"User approval."},{"capability":"archiveSigning","status":"notApplicable","reason":"No release.","owner":"Owner","revisitCondition":"Release starts."},{"capability":"featureFlags","status":"notApplicable","reason":"No rollout.","owner":"Owner","revisitCondition":"Rollout starts."},{"capability":"privacy","status":"applicable","reason":"Required.","owner":"Owner","revisitCondition":"Profile changes."},{"capability":"observability","status":"deferred","reason":"Not integrated.","owner":"Owner","revisitCondition":"Integration starts."},{"capability":"platformCapabilities","status":"notApplicable","reason":"Absent.","owner":"Owner","revisitCondition":"Capabilities change."}]}
         """
     }
 }

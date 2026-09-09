@@ -91,7 +91,8 @@ private func emitStaticEvidence(_ result: StaticEvidenceExecutionResult) -> Neve
        let output = String(data: data, encoding: .utf8) {
         print(output)
     } else {
-        print(#"{"command":"static-evidence","evidence":null,"report":{"checks":[{"id":"QC.STATIC_EVIDENCE.OUTPUT_FAILURE","message":"Static evidence output could not be encoded within its bounded envelope.","status":"BLOCKED"}],"command":"static","schemaVersion":1,"status":"BLOCKED"},"schemaVersion":1,"status":"BLOCKED","verification":null}"#)
+        let command = result.command == "graph-static-evidence" ? "graph-static-evidence" : "static-evidence"
+        print("{\"command\":\"\(command)\",\"evidence\":null,\"report\":{\"checks\":[{\"id\":\"QC.STATIC_EVIDENCE.OUTPUT_FAILURE\",\"message\":\"Static evidence output could not be encoded within its bounded envelope.\",\"status\":\"BLOCKED\"}],\"command\":\"static\",\"schemaVersion\":1,\"status\":\"BLOCKED\"},\"schemaVersion\":1,\"status\":\"BLOCKED\",\"verification\":null}")
         exit(2)
     }
 
@@ -527,6 +528,9 @@ private func runStaticWorkerExecution(
     ]
     if let manifestURL {
         process.arguments! += ["--manifest", manifestURL.path]
+        if scope == .explicitSourcePaths {
+            process.arguments! += ["--scope", scope.rawValue]
+        }
     } else if scope == .explicitSourcePaths {
         process.arguments! += ["--scope", scope.rawValue]
     }
@@ -954,8 +958,13 @@ private func runBuildEvidence(
     )
 }
 
-private func staticEvidenceBlocked(_ id: String, _ message: String) -> StaticEvidenceExecutionResult {
+private func staticEvidenceBlocked(
+    _ id: String,
+    _ message: String,
+    command: String = "static-evidence"
+) -> StaticEvidenceExecutionResult {
     StaticEvidenceExecutionResult(
+        command: command,
         report: QualityReport(
             command: "static",
             checks: [QualityCheck(id: id, status: .blocked, message: message)]
@@ -972,15 +981,20 @@ private func runStaticEvidence(
     expectedSourceRepository: String,
     expectedSourceRevision: String,
     expectedEngineRevision: String,
-    expectedEngineCodeDirectoryHash: String
+    expectedEngineCodeDirectoryHash: String,
+    buildReceipt: XcodeBuildEvidenceReceipt? = nil,
+    outputCommand: String = "static-evidence"
 ) -> StaticEvidenceExecutionResult {
+    let blocked: (String, String) -> StaticEvidenceExecutionResult = { id, message in
+        staticEvidenceBlocked(id, message, command: outputCommand)
+    }
     guard isLowercaseHex(expectedSourceRevision, count: 40),
           isLowercaseHex(expectedEngineRevision, count: 40),
           isLowercaseHex(expectedEngineCodeDirectoryHash, count: 40) else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_EXPECTED_IDENTITY", "Expected revisions and engine CodeDirectory hash must be lowercase 40-byte hexadecimal values.")
+        return blocked("QC.STATIC_EVIDENCE.INVALID_EXPECTED_IDENTITY", "Expected revisions and engine CodeDirectory hash must be lowercase 40-byte hexadecimal values.")
     }
     guard ProcessCodeIdentity.currentCodeDirectoryHash() == expectedEngineCodeDirectoryHash else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.EXECUTABLE_UNTRUSTED", "The running executable code identity did not match the caller-trusted engine CodeDirectory hash.")
+        return blocked("QC.STATIC_EVIDENCE.EXECUTABLE_UNTRUSTED", "The running executable code identity did not match the caller-trusted engine CodeDirectory hash.")
     }
     let deadlineEpochSeconds = StaticWorkerBoundary.boundedDeadlineEpochSeconds(
         inheritedDeadlineEpochSeconds: ProcessInfo.processInfo.environment[staticJobDeadlineEnvironmentKey],
@@ -992,47 +1006,50 @@ private func runStaticEvidence(
           githubRepositoryIdentity(from: engine.origin) == "MArtem/AIZenflowQualityControl",
           source.revision == expectedSourceRevision,
           engine.revision == expectedEngineRevision else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.CHECKOUT_UNTRUSTED", "Source or engine checkout identity, revision, root, or cleanliness could not be verified.")
+        return blocked("QC.STATIC_EVIDENCE.CHECKOUT_UNTRUSTED", "Source or engine checkout identity, revision, root, or cleanliness could not be verified.")
     }
     let canonicalPolicyURL = policyURL.resolvingSymlinksInPath().standardizedFileURL
     guard isDescendant(canonicalPolicyURL, of: engine.root) else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.POLICY_UNTRUSTED", "The static policy must be a Git-tracked regular file inside the verified engine checkout.")
+        return blocked("QC.STATIC_EVIDENCE.POLICY_UNTRUSTED", "The static policy must be a Git-tracked regular file inside the verified engine checkout.")
     }
     let policyRelativePath = String(canonicalPolicyURL.path.dropFirst(engine.root.path.count + 1))
     guard let policyData = boundedToolData(
-            executable: "/usr/bin/git",
-            arguments: ["-C", engine.root.path, "show", "\(engine.revision):\(policyRelativePath)"],
-            maximumOutputBytes: StaticEvidenceInputSnapshots.maximumInputBytes
-          ) else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.POLICY_UNTRUSTED", "The static policy must be a Git-tracked regular file inside the verified engine checkout.")
+        executable: "/usr/bin/git",
+        arguments: ["-C", engine.root.path, "show", "\(engine.revision):\(policyRelativePath)"],
+        maximumOutputBytes: StaticEvidenceInputSnapshots.maximumInputBytes
+    ) else {
+        return blocked("QC.STATIC_EVIDENCE.POLICY_UNTRUSTED", "The static policy must be a Git-tracked regular file inside the verified engine checkout.")
     }
     let snapshots: StaticEvidenceInputSnapshots
     do {
         snapshots = try StaticEvidenceInputSnapshots.load(profileURL: profileURL, policyData: policyData)
     } catch {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SNAPSHOT_UNAVAILABLE", "Profile or policy snapshot could not be read through the bounded input boundary.")
+        return blocked("QC.STATIC_EVIDENCE.SNAPSHOT_UNAVAILABLE", "Profile or policy snapshot could not be read through the bounded input boundary.")
     }
     guard ProfileValidator.validate(snapshots.profileSnapshot.profile).isEmpty else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.INVALID_PROFILE", "The profile snapshot is not semantically valid for static evidence execution.")
+        return blocked("QC.STATIC_EVIDENCE.INVALID_PROFILE", "The profile snapshot is not semantically valid for static evidence execution.")
     }
+    let graphSourcePaths = buildReceipt?.evidence.sourceMembership?.compiledSourcePaths
+        ?? snapshots.profileSnapshot.profile.sourcePaths
+    let workerScope: StaticScanScope = buildReceipt == nil ? .xcodeBuildGraph : .explicitSourcePaths
     guard let manifest = boundedToolData(
         executable: "/usr/bin/git",
-        arguments: ["-C", source.root.path, "ls-tree", "-r", "-z", "-l", "--full-tree", source.revision, "--"] + snapshots.profileSnapshot.profile.sourcePaths.map { ":(literal)\($0)" },
+        arguments: ["-C", source.root.path, "ls-tree", "-r", "-z", "-l", "--full-tree", source.revision, "--"] + graphSourcePaths.map { ":(literal)\($0)" },
         maximumOutputBytes: GitTreeStaticSnapshot.maximumManifestBytes
     ) else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_TREE_UNAVAILABLE", "The exact source Git tree could not be observed within its bounded envelope.")
+        return blocked("QC.STATIC_EVIDENCE.SOURCE_TREE_UNAVAILABLE", "The exact source Git tree could not be observed within its bounded envelope.")
     }
     let sourceSnapshot: GitTreeStaticSnapshot
     do {
         sourceSnapshot = try GitTreeStaticSnapshot(manifest: manifest)
     } catch {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_TREE_INVALID", "The exact source Git tree manifest was malformed or exceeded its immutable limits.")
+        return blocked("QC.STATIC_EVIDENCE.SOURCE_TREE_INVALID", "The exact source Git tree manifest was malformed or exceeded its immutable limits.")
     }
     guard let swiftVersion = boundedToolOutput(executable: "/usr/bin/xcrun", arguments: ["swift", "--version"]),
           let xcodeVersion = boundedToolOutput(executable: "/usr/bin/xcrun", arguments: ["xcodebuild", "-version"]),
           swiftVersion.unicodeScalars.count <= 1_024,
           xcodeVersion.unicodeScalars.count <= 1_024 else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.TOOLCHAIN_UNAVAILABLE", "The selected Swift or Xcode toolchain could not be observed within its bounded envelope.")
+        return blocked("QC.STATIC_EVIDENCE.TOOLCHAIN_UNAVAILABLE", "The selected Swift or Xcode toolchain could not be observed within its bounded envelope.")
     }
 
     var inputDirectory: URL?
@@ -1056,35 +1073,37 @@ private func runStaticEvidence(
         )
     } catch {
         if let inputDirectory { try? FileManager.default.removeItem(at: inputDirectory) }
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be materialized as a private read-only scan view.")
+        return blocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be materialized as a private read-only scan view.")
     }
     guard let inputDirectory else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be prepared for the worker.")
+        return blocked("QC.STATIC_EVIDENCE.SOURCE_SNAPSHOT_UNAVAILABLE", "The exact source Git tree could not be prepared for the worker.")
     }
     defer { try? FileManager.default.removeItem(at: inputDirectory) }
     let worker = runStaticWorkerExecution(
         profileURL: inputDirectory.appendingPathComponent("profile.json"),
         policyURL: inputDirectory.appendingPathComponent("policy.json"),
         repositoryRoot: source.root,
+        scope: workerScope,
         manifestURL: inputDirectory.appendingPathComponent("source-manifest.bin"),
         expectedWorkerCodeDirectoryHash: expectedEngineCodeDirectoryHash,
         deadlineEpochSeconds: deadlineEpochSeconds
     )
     guard let observation = worker.observation else {
         // The public report remains useful on an unauthenticated worker failure, but it is not evidence.
-        return StaticEvidenceExecutionResult(report: worker.report)
+        return StaticEvidenceExecutionResult(command: outputCommand, report: worker.report)
     }
     guard observation.profileSHA256 == snapshots.profileSnapshot.sha256,
           observation.policySHA256 == snapshots.policySHA256,
           observation.sourceManifestSHA256 == sourceSnapshot.sha256 else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.SNAPSHOT_MISMATCH", "Worker snapshot digests did not match the parent-observed profile and policy bytes.")
+        return blocked("QC.STATIC_EVIDENCE.SNAPSHOT_MISMATCH", "Worker snapshot digests did not match the parent-observed profile and policy bytes.")
     }
     guard observedGitCheckout(at: source.root) == source,
           observedGitCheckout(at: engine.root) == engine else {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.CHECKOUT_CHANGED", "Source or engine checkout changed during static execution.")
+        return blocked("QC.STATIC_EVIDENCE.CHECKOUT_CHANGED", "Source or engine checkout changed during static execution.")
     }
     do {
         return StaticEvidenceExecutionResult(
+            command: outputCommand,
             receipt: try StaticEvidenceCoordinator.coordinate(
                 observation: observation,
                 context: StaticEvidenceObservedContext(
@@ -1095,12 +1114,72 @@ private func runStaticEvidence(
                     toolchain: EvidenceToolchain(swiftVersion: swiftVersion, xcodeVersion: xcodeVersion),
                     profileSnapshot: snapshots.profileSnapshot,
                     policySHA256: snapshots.policySHA256
-                )
+                ),
+                buildReceipt: buildReceipt
             )
         )
     } catch {
-        return staticEvidenceBlocked("QC.STATIC_EVIDENCE.VERIFICATION_FAILURE", "Observed static facts could not be converted into verified evidence.")
+        return blocked("QC.STATIC_EVIDENCE.VERIFICATION_FAILURE", "Observed static facts could not be converted into verified evidence.")
     }
+}
+
+private func runGraphStaticEvidence(
+    profileURL: URL,
+    policyURL: URL,
+    sourceRoot: URL,
+    engineRoot: URL,
+    snapshotRoot: URL,
+    expectedSourceRepository: String,
+    expectedSourceRevision: String,
+    expectedEngineRevision: String,
+    expectedEngineCodeDirectoryHash: String,
+    scheme: String,
+    configuration: String,
+    destination: String,
+    executionContext: String
+) -> StaticEvidenceExecutionResult {
+    let buildResult = runBuildEvidence(
+        profileURL: profileURL,
+        sourceRoot: sourceRoot,
+        engineRoot: engineRoot,
+        expectedSourceRepository: expectedSourceRepository,
+        expectedSourceRevision: expectedSourceRevision,
+        expectedEngineRevision: expectedEngineRevision,
+        expectedEngineCodeDirectoryHash: expectedEngineCodeDirectoryHash,
+        scheme: scheme,
+        configuration: configuration,
+        destination: destination,
+        executionContext: executionContext
+    )
+    guard buildResult.status == .pass,
+          let buildReceipt = buildResult.receipt else {
+        let status: QualityStatus = buildResult.status == .fail ? .fail : .blocked
+        return StaticEvidenceExecutionResult(
+            command: "graph-static-evidence",
+            report: QualityReport(
+                command: "static",
+                checks: [QualityCheck(
+                    id: "QC.GRAPH_STATIC.BUILD_REQUIRED",
+                    status: status,
+                    message: "Graph-scoped static evidence requires a verified in-process build receipt with compiler membership."
+                )]
+            )
+        )
+    }
+
+    return runStaticEvidence(
+        profileURL: profileURL,
+        policyURL: policyURL,
+        sourceRoot: sourceRoot,
+        engineRoot: engineRoot,
+        snapshotRoot: snapshotRoot,
+        expectedSourceRepository: expectedSourceRepository,
+        expectedSourceRevision: expectedSourceRevision,
+        expectedEngineRevision: expectedEngineRevision,
+        expectedEngineCodeDirectoryHash: expectedEngineCodeDirectoryHash,
+        buildReceipt: buildReceipt,
+        outputCommand: "graph-static-evidence"
+    )
 }
 
 let arguments = CommandLine.arguments
@@ -1108,7 +1187,7 @@ guard arguments.count >= 2 else {
     emit(
         QualityCommands.blockedUsage(
             command: "usage",
-            message: "Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, mode-execute, static, static-evidence, build-evidence, or aggregate-evidence."
+            message: "Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, mode-execute, static, static-evidence, graph-static-evidence, build-evidence, or aggregate-evidence."
         )
     )
 }
@@ -1252,6 +1331,44 @@ do {
             emitStaticEvidence(staticEvidenceBlocked("QC.CLI.INVALID_ARGUMENTS", "Static evidence command arguments are invalid."))
         }
 
+    case "graph-static-evidence":
+        do {
+            let options = try parseOptions(
+                arguments.dropFirst(2),
+                allowed: [
+                    "--profile", "--policy", "--repository-root", "--engine-repository-root",
+                    "--snapshot-root", "--source-repository", "--expected-source-revision",
+                    "--expected-engine-revision", "--expected-engine-cdhash", "--scheme",
+                    "--configuration", "--destination", "--execution-context"
+                ]
+            )
+            emitStaticEvidence(
+                runGraphStaticEvidence(
+                    profileURL: fileURL(try required("--profile", in: options)),
+                    policyURL: fileURL(try required("--policy", in: options)),
+                    sourceRoot: fileURL(try required("--repository-root", in: options)),
+                    engineRoot: fileURL(try required("--engine-repository-root", in: options)),
+                    snapshotRoot: fileURL(try required("--snapshot-root", in: options)),
+                    expectedSourceRepository: try required("--source-repository", in: options),
+                    expectedSourceRevision: try required("--expected-source-revision", in: options),
+                    expectedEngineRevision: try required("--expected-engine-revision", in: options),
+                    expectedEngineCodeDirectoryHash: try required("--expected-engine-cdhash", in: options),
+                    scheme: try required("--scheme", in: options),
+                    configuration: try required("--configuration", in: options),
+                    destination: try required("--destination", in: options),
+                    executionContext: try required("--execution-context", in: options)
+                )
+            )
+        } catch {
+            emitStaticEvidence(
+                staticEvidenceBlocked(
+                    "QC.CLI.INVALID_ARGUMENTS",
+                    "Graph static evidence command arguments are invalid.",
+                    command: "graph-static-evidence"
+                )
+            )
+        }
+
     case "build-evidence":
         do {
             let options = try parseOptions(
@@ -1342,15 +1459,13 @@ do {
             }
             return value
         } ?? .xcodeBuildGraph
-        if options["--manifest"] != nil, options["--scope"] != nil {
-            throw CLIError.message("Static evidence workers cannot use an explicit static scan scope")
-        }
         let response: StaticWorkerResponse
         if let manifest = options["--manifest"] {
             response = QualityCommands.staticEvidenceWorkerResponse(
                 profileData: try boundedFileData(at: fileURL(profile), maximumBytes: StaticEvidenceInputSnapshots.maximumInputBytes),
                 policyData: try boundedFileData(at: fileURL(policy), maximumBytes: StaticEvidenceInputSnapshots.maximumInputBytes),
-                manifestData: try boundedFileData(at: fileURL(manifest), maximumBytes: GitTreeStaticSnapshot.maximumManifestBytes)
+                manifestData: try boundedFileData(at: fileURL(manifest), maximumBytes: GitTreeStaticSnapshot.maximumManifestBytes),
+                scope: scope
             )
         } else {
             response = QualityCommands.staticWorkerResponse(
@@ -1408,7 +1523,7 @@ do {
         emit(
             QualityCommands.blockedUsage(
                 command: command,
-                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, static, static-evidence, build-evidence, or aggregate-evidence."
+                message: "Unknown command. Expected doctor, validate-profile, validate-evidence-expectation, mode-plan, static, static-evidence, graph-static-evidence, build-evidence, or aggregate-evidence."
             )
         )
     }

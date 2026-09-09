@@ -42,6 +42,8 @@ package struct StaticEvidenceReceipt: Sendable {
 package enum StaticEvidenceCoordinationError: Error {
     case invalidTrustedContext
     case invalidProfile
+    case missingSourceMembership
+    case invalidSourceMembership
     case missingProfileDigest
     case missingPolicyDigest
     case profileDigestMismatch
@@ -53,19 +55,37 @@ package enum StaticEvidenceCoordinationError: Error {
 ///
 /// This type neither reads documents nor launches processes. It accepts no caller-supplied command,
 /// gate, expectation, verdict, authorization, or evidence JSON, so those values cannot authorize
-/// themselves. Stage 9D will own trusted observation and public integration.
+/// themselves. For schema version 2 graph profiles, only the package-internal build receipt from the
+/// authenticated Xcode build boundary can provide source-membership proof.
 package enum StaticEvidenceCoordinator {
     package static let engineVersion = "0.1.0-dev"
 
     package static func coordinate(
         observation: ValidatedStaticWorkerObservation,
-        context: StaticEvidenceObservedContext
+        context: StaticEvidenceObservedContext,
+        buildReceipt: XcodeBuildEvidenceReceipt? = nil
     ) throws -> StaticEvidenceReceipt {
         guard isValidContext(context) else {
             throw StaticEvidenceCoordinationError.invalidTrustedContext
         }
         guard ProfileValidator.validate(context.profileSnapshot.profile).isEmpty else {
             throw StaticEvidenceCoordinationError.invalidProfile
+        }
+        let sourceMembership = buildReceipt?.evidence.sourceMembership
+        if context.profileSnapshot.profile.schemaVersion == 2,
+           context.profileSnapshot.profile.xcode?.sourceMembership.authority == .xcodeBuildGraph {
+            guard let buildReceipt,
+                  let sourceMembership,
+                  isValidBuildReceipt(buildReceipt, context: context) else {
+                throw StaticEvidenceCoordinationError.missingSourceMembership
+            }
+            guard isValidSourceMembership(
+                sourceMembership,
+                profile: context.profileSnapshot.profile,
+                selection: buildReceipt.observation.selection
+            ) else {
+                throw StaticEvidenceCoordinationError.invalidSourceMembership
+            }
         }
         guard let profileSHA256 = observation.profileSHA256 else {
             throw StaticEvidenceCoordinationError.missingProfileDigest
@@ -111,6 +131,7 @@ package enum StaticEvidenceCoordinator {
             permissions: context.profileSnapshot.profile.permissions,
             commands: [command],
             gates: [gate],
+            sourceMembership: sourceMembership,
             claimedVerdict: claimedVerdict
         )
         let expected = EvidenceExpectation(
@@ -146,6 +167,75 @@ package enum StaticEvidenceCoordinator {
             evidence: evidence,
             verification: verification
         )
+    }
+
+    private static func isValidSourceMembership(
+        _ membership: SourceMembershipEvidence,
+        profile: ProjectProfile,
+        selection: XcodeBuildSelection
+    ) -> Bool {
+        guard membership.authority == .xcodeBuildGraph,
+              membership.status == .verified,
+              !membership.targets.isEmpty,
+              !membership.compiledSourcePaths.isEmpty,
+              membership.declaredSourcePaths == profile.sourcePaths.sorted(by: bytewiseLessThan),
+              membership.declaredSourcePaths.allSatisfy(isSafeRelativePath),
+              membership.compiledSourcePaths == membership.compiledSourcePaths.sorted(by: bytewiseLessThan),
+              Set(membership.compiledSourcePaths).count == membership.compiledSourcePaths.count,
+              membership.compiledSourcePaths.allSatisfy(isSafeRelativePath),
+              membership.compiledSourcePaths.allSatisfy({ compiledPath in
+                  membership.declaredSourcePaths.contains { declaredPath in
+                      declaredPath == "."
+                          || compiledPath == declaredPath
+                          || compiledPath.hasPrefix(declaredPath + "/")
+                  }
+              }),
+              membership.claims == SourceMembershipClaim.allCases,
+              (1...100_000).contains(membership.compilerSectionCount),
+              (0...100_000).contains(membership.externalSourceInputCount) else {
+            return false
+        }
+
+        guard membership.scheme == selection.scheme,
+              membership.configuration == selection.configuration,
+              membership.destination == selection.destination,
+              let scheme = profile.xcode?.schemes.first(where: {
+                  $0.name == membership.scheme
+                      && $0.configurations.contains(membership.configuration)
+                      && $0.destinations.contains(membership.destination)
+              }) else {
+            return false
+        }
+        return membership.targets == scheme.targets.sorted(by: bytewiseLessThan)
+    }
+
+    private static func isValidBuildReceipt(
+        _ receipt: XcodeBuildEvidenceReceipt,
+        context: StaticEvidenceObservedContext
+    ) -> Bool {
+        let evidence = receipt.evidence
+        let requiredGateIDs: Set<String> = [
+            "QC.BUILD",
+            "QC.BUILD.MEMBERSHIP",
+            "QC.BUILD.FIRST_PARTY_WARNINGS",
+            "QC.CONCURRENCY.DIAGNOSTICS"
+        ]
+        return receipt.verification.issues.isEmpty
+            && receipt.verification.verdict == .ready
+            && evidence.claimedVerdict == .ready
+            && evidence.sourceRepository == context.sourceRepository
+            && evidence.sourceRevision == context.sourceRevision
+            && evidence.engineVersion == engineVersion
+            && evidence.engineRevision == context.engineRevision
+            && evidence.profileSchemaVersion == context.profileSnapshot.profile.schemaVersion
+            && evidence.profileSHA256 == context.profileSnapshot.sha256
+            && evidence.toolchain == context.toolchain
+            && evidence.permissions == context.profileSnapshot.profile.permissions
+            && Set(evidence.gates.map(\.id)) == requiredGateIDs
+            && evidence.gates.allSatisfy { $0.status == .pass }
+            && evidence.commands.count == 1
+            && evidence.commands.first?.id == "xcode-build"
+            && receipt.observation.evidence.compiledSourcePaths == evidence.sourceMembership?.compiledSourcePaths
     }
 
     private static func commandSHA256(
@@ -199,6 +289,16 @@ package enum StaticEvidenceCoordinator {
         return bytes.count == count && bytes.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
         }
+    }
+
+    private static func isSafeRelativePath(_ value: String) -> Bool {
+        !value.hasPrefix("/")
+            && !value.contains("\\")
+            && !value.split(separator: "/").contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+    }
+
+    private static func bytewiseLessThan(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.lexicographicallyPrecedes(rhs.utf8)
     }
 
     private static func exitCode(for status: QualityStatus) -> Int {
