@@ -84,6 +84,22 @@ struct VerifierContractTests {
         #expect(report.checks.map(\.id) == ["QC.PROFILE.CONTRACT"])
     }
 
+    @Test("A schema version 2 profile is structurally valid before graph resolution")
+    func schemaVersion2ProfilePassesStructuralValidation() throws {
+        let temporaryProfile = try TemporaryProfile(data: Data(validSchemaV2ProfileJSON.utf8))
+        defer {
+            #expect(throws: Never.self) {
+                try temporaryProfile.remove()
+            }
+        }
+
+        let report = QualityCommands.validateProfile(at: temporaryProfile.url)
+
+        #expect(report.status == .pass)
+        #expect(report.checks.map(\.id) == ["QC.PROFILE.CONTRACT"])
+        #expect(report.checks.allSatisfy { $0.id != "QC.PROFILE.XCODE_GRAPH_RESOLUTION_REQUIRED" })
+    }
+
     @Test("A structurally valid expectation document remains untrusted")
     func expectationDocumentValidationDoesNotProduceEvidence() throws {
         let fixture = try TemporaryProfile(data: Data(validExpectationJSON.utf8))
@@ -98,6 +114,8 @@ struct VerifierContractTests {
 }
 
 private let validExpectationJSON = #"{"schemaVersion":1,"sourceRepository":"MArtem/example","sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","engineVersion":"1.0.0","engineRevision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","toolchain":{"swiftVersion":"Swift 6","xcodeVersion":"Xcode 16"},"commands":[{"id":"static","commandSHA256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","exitCode":0,"actions":[],"authorization":"NOT_REQUIRED"}],"gates":[{"id":"QC.STATIC","status":"PASS","message":"Static passed.","commandID":"static","actions":[]}],"residualRisks":[]}"#
+
+private let validSchemaV2ProfileJSON = #"{"schemaVersion":2,"project":{"kind":"xcodeproj","path":"App.xcodeproj"},"sourcePaths":["Sources"],"mode":"controlled","permissions":{"testCreation":"allow","testModification":"allow","localTestExecution":"ask","githubExecution":"manual","uiTests":"deny","simulatorOrDevice":"deny","performanceOrInstruments":"deny"},"sandbox":{"root":".quality-control","cache":".quality-control/cache"},"engine":{"version":"0.1.0","revision":"0123456789012345678901234567890123456789"},"xcode":{"sourceMembership":{"authority":"xcode-build-graph"},"schemes":[{"name":"App","targets":["App"],"configurations":["Debug"],"destinations":["platform=macOS"],"testPlans":[]}]},"applicability":[{"capability":"tests","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"snapshotTests","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"uiTests","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"archiveSigning","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"featureFlags","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"privacy","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"observability","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."},{"capability":"platformCapabilities","status":"applicable","reason":"Covered by the quality profile.","owner":"Quality control","revisitCondition":"Profile version changes."}]}"#
 
 enum InvalidProfileInput: String, CaseIterable, Sendable {
     case malformed

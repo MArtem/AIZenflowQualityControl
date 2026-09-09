@@ -18,6 +18,29 @@ struct XcodeGraphDiscoveryTests {
         #expect(checks.map(\.status) == [.pass, .blocked])
     }
 
+    @Test("Settings discovery is query-only and does not invoke a product build")
+    func settingsDiscoveryDoesNotInvokeBuild() {
+        var invocations = [[String]]()
+        _ = XcodeGraphDiscovery.checks(
+            profile: profile,
+            repositoryRoot: URL(fileURLWithPath: "/repository", isDirectory: true),
+            paths: paths,
+            execute: { arguments, _, _, _ in
+                invocations.append(arguments)
+                if arguments.contains("-list") {
+                    return .success(Data(#"{"project":{"configurations":["Debug"],"schemes":["App"],"targets":["App"]}}"#.utf8))
+                }
+                return .success(Data(#"[{"target":"App","buildSettings":{"CONFIGURATION":"Debug","PROJECT_DIR":"/repository"}}]"#.utf8))
+            },
+            startedAt: DispatchTime.now().uptimeNanoseconds
+        )
+
+        #expect(invocations.count == 2)
+        #expect(invocations.dropFirst().allSatisfy { arguments in
+            arguments.contains("-showBuildSettings") && !arguments.contains("build")
+        })
+    }
+
     @Test("A missing declared scheme fails discovery")
     func missingSchemeFails() {
         let checks = discover(

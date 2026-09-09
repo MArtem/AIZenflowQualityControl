@@ -142,15 +142,18 @@ quality build-evidence --profile <profile.json> --repository-root <source-reposi
 quality aggregate-evidence --evidence <receipt.json[,receipt.json...]> --expectation <trusted-expectation.json>
 ```
 
-- `validate-profile` decodes profile schema versions 1 and 2. Version 1 preserves absolute sandbox
-  paths for compatibility; version 2 requires normalized repository-relative sandbox paths so the
-  same exact Git-tracked profile bytes resolve portably on local Macs and GitHub runners. Project,
-  source, and version 2 sandbox traversal remains forbidden.
+- `validate-profile` performs only the structural contract check for profile schema versions 1 and
+  2. Version 1 preserves absolute sandbox paths for compatibility; version 2 requires normalized
+  repository-relative sandbox paths so the same exact Git-tracked profile bytes resolve portably on
+  local Macs and GitHub runners. Project, source, and version 2 sandbox traversal remains forbidden.
 - `validate-evidence-expectation` validates only a bounded, closed document envelope; the caller-
   supplied document remains untrusted and does not produce an evidence verdict.
-- `doctor` verifies configured repository, project/workspace, source, and sandbox paths without
-  running builds or tests. For schema version 2 it resolves the sandbox from the supplied repository
-  root and rejects symbolic-link escape before Xcode graph discovery.
+- `doctor` verifies configured repository, project/workspace, source, and sandbox paths, then runs a
+  bounded `xcodebuild -showBuildSettings -json` discovery for the declared scheme/configuration/
+  destination matrix; it never runs a product build or tests. For schema version 2 it resolves the
+  sandbox from the supplied repository root and rejects symbolic-link escape before Xcode graph
+  discovery. A successful graph selection still leaves source membership `BLOCKED` until the
+  authenticated build-evidence boundary observes compiler inputs.
 - `mode-plan` expands one user-selected manual mode into stable, permission-aware steps. It is a
   pre-execution plan only; `NOT_RUN_BY_USER_DECISION`, `SKIPPED`, and `BLOCKED` are never runtime
   PASS evidence.
