@@ -346,13 +346,28 @@ private struct BuildResultsDestination: Decodable {
     }
 
     var hasValidStrings: Bool {
-        XcodeBuildEvidenceVerifier.isBoundedNonEmpty(deviceID)
+        let baseStringsAreValid = XcodeBuildEvidenceVerifier.isBoundedNonEmpty(deviceID)
             && XcodeBuildEvidenceVerifier.isBoundedNonEmpty(deviceName)
             && XcodeBuildEvidenceVerifier.isBoundedNonEmpty(architecture)
             && XcodeBuildEvidenceVerifier.isBoundedNonEmpty(modelName)
             && XcodeBuildEvidenceVerifier.isBoundedOptional(platform)
-            && XcodeBuildEvidenceVerifier.isBoundedNonEmpty(osVersion)
             && XcodeBuildEvidenceVerifier.isBoundedOptional(osBuildNumber)
+        guard baseStringsAreValid else {
+            return false
+        }
+        if isGenericSimulatorPlaceholder {
+            return osVersion.isEmpty
+        }
+        return XcodeBuildEvidenceVerifier.isBoundedNonEmpty(osVersion)
+    }
+
+    private var isGenericSimulatorPlaceholder: Bool {
+        deviceID == "dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder"
+            && deviceName == "Any iOS Simulator Device"
+            && architecture == "undefined_arch"
+            && modelName == "Apple device"
+            && platform == "iOS Simulator"
+            && osVersion.isEmpty
     }
 }
 

@@ -116,6 +116,34 @@ struct XcodeBuildEvidenceVerificationTests {
         }
     }
 
+    @Test("A generic iOS Simulator destination is valid without a concrete runtime")
+    func acceptsGenericSimulatorDestination() throws {
+        var results = try buildResults()
+        var document = try JSONSerialization.jsonObject(with: results) as! [String: Any]
+        document["destination"] = [
+            "architecture": "undefined_arch",
+            "deviceId": "dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder",
+            "deviceName": "Any iOS Simulator Device",
+            "modelName": "Apple device",
+            "osVersion": "",
+            "platform": "iOS Simulator"
+        ]
+        results = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+
+        let observation = try XcodeBuildEvidenceVerifier.verify(
+            processResult: successfulProcess,
+            buildResultsData: results,
+            buildLogData: try buildLog(
+                command: "/usr/bin/swiftc -frontend -c /repository/Sources/App.swift"
+            ),
+            repositoryRoot: repositoryRoot,
+            sourcePaths: ["Sources"]
+        )
+
+        #expect(observation.destination.deviceName == "Any iOS Simulator Device")
+        #expect(observation.destination.osVersion.isEmpty)
+    }
+
     @Test("Inconsistent structured issue counts are rejected")
     func rejectsInconsistentIssueCounts() throws {
         expectError(.inconsistentIssueCounts) {
