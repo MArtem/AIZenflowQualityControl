@@ -255,7 +255,8 @@ package enum XcodeBuildEvidenceSupervisor {
                 buildResultsData: firstBuildResults,
                 buildLogData: firstBuildLog,
                 repositoryRoot: canonicalRepositoryRoot,
-                sourcePaths: profile.sourcePaths
+                sourcePaths: profile.sourcePaths,
+                fileListRoot: layout.derivedData
             )
         } catch let error as XcodeBuildEvidenceVerificationError {
             throw XcodeBuildEvidenceSupervisionError.verification(error)

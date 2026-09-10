@@ -95,6 +95,35 @@ struct XcodeBuildLogMembershipTests {
         #expect(observation.compilerSectionCount == 1)
     }
 
+    @Test("SwiftDriver file lists are expanded only inside the supervised root")
+    func expandsSwiftDriverFileList() throws {
+        let fixture = try TemporaryProfile(data: Data("{}".utf8))
+        defer {
+            do {
+                try fixture.remove()
+            } catch {
+                Issue.record("Fixture cleanup failed: \(error)")
+            }
+        }
+        try fixture.write(
+            Data("\(fixture.directory.path)/Sources/App.swift\n".utf8),
+            at: "DerivedData/App.SwiftFileList"
+        )
+
+        let log = try buildLog(
+            command: "builtin-SwiftDriver -- /usr/bin/swiftc @\(fixture.directory.path)/DerivedData/App.SwiftFileList"
+        )
+        let observation = try XcodeBuildLogMembershipExtractor.extract(
+            logData: log,
+            repositoryRoot: fixture.directory,
+            sourcePaths: ["Sources"],
+            fileListRoot: fixture.directory.appendingPathComponent("DerivedData")
+        )
+
+        #expect(observation.compiledSourcePaths == ["Sources/App.swift"])
+        #expect(observation.compilerSectionCount == 1)
+    }
+
     @Test("Linker response files do not block source membership proof")
     func linkerResponseFileDoesNotBlockMembership() throws {
         let log = try JSONSerialization.data(
