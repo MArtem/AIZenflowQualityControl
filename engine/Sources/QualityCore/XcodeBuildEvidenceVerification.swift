@@ -100,7 +100,8 @@ package enum XcodeBuildEvidenceVerifier {
         buildResultsData: Data,
         buildLogData: Data,
         repositoryRoot: URL,
-        sourcePaths: [String]
+        sourcePaths: [String],
+        fileListRoot: URL? = nil
     ) throws -> XcodeBuildEvidenceObservation {
         guard !processResult.timedOut else {
             throw XcodeBuildEvidenceVerificationError.buildProcessTimedOut
@@ -177,7 +178,8 @@ package enum XcodeBuildEvidenceVerifier {
             membership = try XcodeBuildLogMembershipExtractor.extract(
                 logData: buildLogData,
                 repositoryRoot: repositoryRoot,
-                sourcePaths: sourcePaths
+                sourcePaths: sourcePaths,
+                fileListRoot: fileListRoot
             )
         } catch let error as XcodeBuildLogMembershipError {
             throw XcodeBuildEvidenceVerificationError.sourceMembership(error)

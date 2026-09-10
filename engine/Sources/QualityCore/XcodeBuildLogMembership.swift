@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 package struct XcodeBuildLogMembershipObservation: Equatable, Sendable {
@@ -31,8 +32,10 @@ package enum XcodeBuildLogMembershipError: Error, Equatable {
 /// execution before it may remove the source-membership blocker.
 package enum XcodeBuildLogMembershipExtractor {
     package static let maximumDocumentBytes = 32 * 1_024 * 1_024
+    package static let maximumInputFileListBytes = 8 * 1_024 * 1_024
     private static let maximumSections = 100_000
     private static let maximumRepositoryInputs = 100_000
+    private static let maximumInputFileListEntries = 100_000
     private static let maximumCommandBytes = 8 * 1_024 * 1_024
     private static let compiledSourceExtensions: Set<String> = [
         "c", "cc", "cpp", "cxx", "m", "metal", "mm", "swift"
@@ -41,7 +44,8 @@ package enum XcodeBuildLogMembershipExtractor {
     package static func extract(
         logData: Data,
         repositoryRoot: URL,
-        sourcePaths: [String]
+        sourcePaths: [String],
+        fileListRoot: URL? = nil
     ) throws -> XcodeBuildLogMembershipObservation {
         guard logData.count <= maximumDocumentBytes else {
             throw XcodeBuildLogMembershipError.documentTooLarge
@@ -99,13 +103,10 @@ package enum XcodeBuildLogMembershipExtractor {
                 }
                 compilerSectionCount += 1
                 for word in words {
-                    guard compilerCommandKind == .structured
-                        || !isUnresolvedCompilerInputList(word) else {
-                        throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
-                    }
-                    try appendCommandWord(
+                    try appendCompilerWord(
                         word,
                         canonicalRoot: canonicalRoot,
+                        fileListRoot: fileListRoot,
                         to: &sectionInputs,
                         externalInputs: &externalSourceInputs,
                         rejectsRelativeSource: compilerCommandKind == .raw
@@ -176,6 +177,121 @@ package enum XcodeBuildLogMembershipExtractor {
             compilerSectionCount: compilerSectionCount,
             externalSourceInputCount: externalSourceInputs.count
         )
+    }
+
+    private static func appendCompilerWord(
+        _ word: String,
+        canonicalRoot: URL,
+        fileListRoot: URL?,
+        to paths: inout Set<String>,
+        externalInputs: inout Set<String>,
+        rejectsRelativeSource: Bool
+    ) throws {
+        if isSourceFileListReference(word) {
+            guard let fileListRoot,
+                  let fileListURL = sourceFileListURL(
+                      from: word,
+                      under: fileListRoot
+                  ),
+                  let fileListData = try? readInputFileList(at: fileListURL),
+                  let fileList = String(data: fileListData, encoding: .utf8) else {
+                throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
+            }
+            let entries = fileList.split(whereSeparator: { scalar in
+                scalar == "\n" || scalar == "\r"
+            })
+            guard entries.count <= maximumInputFileListEntries else {
+                throw XcodeBuildLogMembershipError.collectionLimitExceeded
+            }
+            for entry in entries {
+                try appendCommandWord(
+                    String(entry),
+                    canonicalRoot: canonicalRoot,
+                    to: &paths,
+                    externalInputs: &externalInputs,
+                    rejectsRelativeSource: true
+                )
+            }
+            return
+        }
+
+        guard !isUnresolvedCompilerInputList(word) else {
+            throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
+        }
+        try appendCommandWord(
+            word,
+            canonicalRoot: canonicalRoot,
+            to: &paths,
+            externalInputs: &externalInputs,
+            rejectsRelativeSource: rejectsRelativeSource
+        )
+    }
+
+    private static func sourceFileListURL(
+        from word: String,
+        under fileListRoot: URL
+    ) -> URL? {
+        guard word.hasPrefix("@") else {
+            return nil
+        }
+        let rawPath = String(word.dropFirst())
+        guard rawPath.hasPrefix("/"),
+              rawPath.lowercased().hasSuffix(".swiftfilelist") else {
+            return nil
+        }
+        let lexicalRoot = fileListRoot.standardizedFileURL
+        let lexicalURL = URL(fileURLWithPath: rawPath).standardizedFileURL
+        guard ProfileValidator.resolvesWithinRepository(
+            lexicalURL,
+            root: lexicalRoot,
+            allowingRoot: false
+        ) else {
+            return nil
+        }
+        let resolvedURL = lexicalURL.resolvingSymlinksInPath().standardizedFileURL
+        guard ProfileValidator.resolvesWithinRepository(
+            resolvedURL,
+            root: lexicalRoot.resolvingSymlinksInPath().standardizedFileURL,
+            allowingRoot: false
+        ) else {
+            return nil
+        }
+        return resolvedURL
+    }
+
+    private static func readInputFileList(at url: URL) throws -> Data {
+        let descriptor = open(
+            url.path,
+            O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard descriptor >= 0 else {
+            throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var before = stat()
+        guard fstat(descriptor, &before) == 0,
+              before.st_mode & S_IFMT == S_IFREG,
+              before.st_size >= 0,
+              before.st_size <= off_t(maximumInputFileListBytes) else {
+            throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
+        }
+        let data: Data
+        do {
+            data = try handle.readToEnd() ?? Data()
+        } catch {
+            throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
+        }
+        var after = stat()
+        guard fstat(descriptor, &after) == 0,
+              before.st_dev == after.st_dev,
+              before.st_ino == after.st_ino,
+              before.st_size == after.st_size,
+              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
+              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
+              data.count <= maximumInputFileListBytes else {
+            throw XcodeBuildLogMembershipError.unresolvedCompilerInputList
+        }
+        return data
     }
 
     private static func appendLocation(
@@ -310,7 +426,7 @@ package enum XcodeBuildLogMembershipExtractor {
             let executable = URL(fileURLWithPath: word).lastPathComponent
             return executable.hasPrefix("builtin-Swift")
         }) {
-            return nil
+            return words.contains(where: isSourceFileListReference) ? .raw : nil
         }
         let compilerExecutables: Set<String> = [
             "clang", "clang++", "gcc", "metal", "metalfe", "swift-frontend", "swiftc"
@@ -329,6 +445,11 @@ package enum XcodeBuildLogMembershipExtractor {
             || lowercased.contains(".swiftconstvaluesfilelist")
             || lowercased.hasSuffix(".resp")
             || lowercased.hasSuffix(".rsp")
+    }
+
+    private static func isSourceFileListReference(_ word: String) -> Bool {
+        word.hasPrefix("@")
+            && String(word.dropFirst()).lowercased().hasSuffix(".swiftfilelist")
     }
 
     private static func bytewiseLessThan(_ lhs: String, _ rhs: String) -> Bool {
