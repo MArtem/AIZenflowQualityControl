@@ -1,9 +1,10 @@
 # Engine
 
 This directory owns the dependency-free Swift quality-control engine and CLI. The current CLI is
-limited to profile validation, doctor checks, deterministic static scanning, and bounded static
-evidence execution; it does not run
-Xcode, tests, Simulator/device work, performance tools, or external review.
+limited to profile validation, doctor checks, deterministic static scanning, and bounded static or
+graph-static evidence execution; it does not run tests, Simulator/device work, performance tools, or
+external review. Only the graph-static boundary runs its one authenticated Xcode build, solely to
+obtain compiler-membership proof for the subsequent static scan.
 
 `QualityCore` also owns the independent permission evaluator, Stage 9A in-memory evidence contracts,
 and bounded artifact-hashing primitives behind an internal worker boundary. Production artifact
@@ -21,6 +22,13 @@ identity; the CLI does not derive it from source or a mutable binary path. Futur
 before acting and must not infer user authorization from untrusted evidence.
 `quality validate-evidence-expectation` is a structural validator only; its input remains
 untrusted and cannot produce an evidence verdict.
+
+`quality graph-static-evidence` is the graph-scoped execution variant. It runs one authenticated
+build first, keeps the package-internal build receipt in memory, and gives the static worker only
+the compiler-membership paths from that receipt. Its PASS evidence carries verified
+`sourceMembership`; a caller-supplied membership object or standalone receipt cannot authorize the
+handoff. The ordinary `static-evidence` command remains blocked for schema version 2 graph profiles
+without this authenticated handoff.
 
 The build-evidence receipt carries a separate `sourceMembership` object. The profile's explicit
 source scopes are not treated as compiled membership: the authenticated structured compiler log

@@ -50,9 +50,11 @@ public struct StaticEvidenceExecutionResult: Encodable, Sendable {
     public let evidence: QualityEvidence?
     public let verification: EvidenceVerification?
 
-    package init(report: QualityReport) {
+    package init(
+        command: String = "static-evidence",
+        report: QualityReport
+    ) {
         schemaVersion = Self.currentSchemaVersion
-        command = "static-evidence"
         if report.command != "static" || report.status == .pass {
             self.report = QualityReport(
                 command: "static",
@@ -69,13 +71,17 @@ public struct StaticEvidenceExecutionResult: Encodable, Sendable {
             self.report = report
             status = report.status
         }
+        self.command = command
         evidence = nil
         verification = nil
     }
 
-    package init(receipt: StaticEvidenceReceipt) {
+    package init(
+        command: String = "static-evidence",
+        receipt: StaticEvidenceReceipt
+    ) {
         schemaVersion = Self.currentSchemaVersion
-        command = "static-evidence"
+        self.command = command
         status = receipt.report.status
         report = receipt.report
         evidence = receipt.evidence

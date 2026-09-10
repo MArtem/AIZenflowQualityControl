@@ -35,6 +35,22 @@ struct StaticEvidenceExecutionTests {
         #expect(result.verification == nil)
     }
 
+    @Test("Graph static evidence keeps its distinct public command identity")
+    func graphStaticEvidenceHasDistinctCommandIdentity() {
+        let result = StaticEvidenceExecutionResult(
+            command: "graph-static-evidence",
+            report: QualityReport(
+                command: "static",
+                checks: [QualityCheck(id: "QC.GRAPH_STATIC.BUILD_REQUIRED", status: .blocked, message: "Build required.")]
+            )
+        )
+
+        #expect(result.command == "graph-static-evidence")
+        #expect(result.status == .blocked)
+        #expect(result.evidence == nil)
+        #expect(result.verification == nil)
+    }
+
     @Test("A Git tree manifest reports metadata without projecting onto a filesystem")
     func gitTreeManifestScansMetadataDirectly() throws {
         let snapshot = try GitTreeStaticSnapshot(

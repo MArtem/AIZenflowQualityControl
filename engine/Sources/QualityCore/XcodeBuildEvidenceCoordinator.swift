@@ -542,7 +542,8 @@ package enum XcodeBuildEvidenceCoordinator {
 ///
 /// Only a fully coordinated PASS carries evidence. Preflight, build, mutation, or verification
 /// failures carry a terminal report and nil evidence so consumers cannot mistake partial work for
-/// exact-SHA proof.
+/// exact-SHA proof. The package-internal receipt is retained only for same-process graph-scoped
+/// static handoff and is never encoded into the public result.
 public struct XcodeBuildEvidenceExecutionResult: Encodable, Sendable {
     public static let currentSchemaVersion = 1
     public let schemaVersion: Int
@@ -551,6 +552,7 @@ public struct XcodeBuildEvidenceExecutionResult: Encodable, Sendable {
     public let report: QualityReport
     public let evidence: QualityEvidence?
     public let verification: EvidenceVerification?
+    package let receipt: XcodeBuildEvidenceReceipt?
 
     package init(report: QualityReport) {
         schemaVersion = Self.currentSchemaVersion
@@ -573,6 +575,7 @@ public struct XcodeBuildEvidenceExecutionResult: Encodable, Sendable {
         }
         evidence = nil
         verification = nil
+        receipt = nil
     }
 
     package init(receipt: XcodeBuildEvidenceReceipt) {
@@ -606,6 +609,7 @@ public struct XcodeBuildEvidenceExecutionResult: Encodable, Sendable {
         )
         evidence = receipt.evidence
         verification = receipt.verification
+        self.receipt = receipt
     }
 
     private enum CodingKeys: String, CodingKey {
